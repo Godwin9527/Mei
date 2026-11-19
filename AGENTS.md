@@ -49,4 +49,16 @@
 - **播客播放保护**：`playback/source/PodcastTrackRegistry.kt` 记录播客歌曲 id；`MediaUriProvider` 对命中项固定 `standard` 音质并跳过 LX／解灰兜底（否则会白等 15 秒）。普通歌曲在目标音质取不到地址时，会再降级试一次 `standard`。
 - **应用内更新**：`data/repository/UpdateRepository.kt` + `ui/screen/update/`，入口在 设置 → 检查更新；安装包下载到 `filesDir/updates`，经 `FileProvider`（authority `${applicationId}.fileprovider`）交给系统安装器；需要 `REQUEST_INSTALL_PACKAGES` 权限。Release 资源名由 `tools/ci/prepare-apks.py` 生成，格式 `Mei_<tag>_<abi>.apk`，更新逻辑按 ABI 匹配。
 - **歌词页控制栏**：`PreferenceKeys.LyricsControlsAutoHideKey`（默认 false）控制是否 3 秒自动收起；点击歌词区域不再切换控制栏，只有上下滑动歌词才切换显隐。
-- **发布**：`versionName` 与 tag 保持一致（当前 2.2.0 / versionCode 4）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
+- **发布**：`versionName` 与 tag 保持一致（当前 2.3.0 / versionCode 5）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
+
+## v2.3.0 起：播客体验与播放记忆
+
+- **播客列表**：`PodcastsScreen` 用 `MeiCollectionPage(artworkColumns = null)` 渲染单列行，标题两行；顶部 `PodcastSearchField` 过滤已关注电台。电台内同样有搜索框，按节目名本地过滤。
+- **排序**：`PodcastSort.OLDEST/NEWEST/NUMBER_ASC/NUMBER_DESC`，默认 `OLDEST`，选择存 `PodcastSortKey`。集数排序走 `compareNatural`（连续数字按整数比较，`042` < `132`）。
+- **全量加载**：`PodcastViewModel.reload` 以 `asc = true` 连续拉完所有页（`PAGE_SIZE=50`，`MAX_PAGES=60`），排序与搜索只在本地做，因此不再出现早期集数翻不到。
+- **播放记忆**：Room 表 `playback_progress`（`PlaybackProgress`，DB 19→20）。`MusicService` 每秒采样、每 10 秒落库，切歌与 `onDestroy` 补写；`onMediaItemTransition`（排除单曲循环）调用 `resumeFromProgress` 自动续播。阈值在 `PlaybackProgressPolicy`：短于 15 秒不记，距结尾 20 秒内视为听完并删除。
+  - 清除入口：电台页右上角「清除本电台播放记忆」、播放设置「清除全部播放记忆」（`PlaybackMemoryViewModel`）。
+- **字号**：`PlayerTitleFontSizeKey`（0 = 跟随主题）与 `PodcastTextSizeKey`（默认 15），在外观设置里按 px 直选。`Title.kt` 依据 `queueSource.type == PODCAST` 选播客字号，并给标题与副标题加 `basicMarquee`。
+- **时间跳转**：`PlayerControlsSection.PodcastSeekRow` 仅在播客曲目显示 -30s/-5s/+5s/+30s，原有上一首/播放/下一首不变。
+- **音乐库排序**：`LibrarySection` + `LibrarySectionOrderKey`，手机端五个区块由 `mobileLibraryContent` 按顺序分派到 `mobileXxxSection`；顶栏 `SwapVert` 打开 `LibraryLayoutDialog`（上下箭头）。平板布局暂未接入该顺序。
+- **搜索**：`SearchType.Podcast`（type=1009），`SearchResponseParser` 解析 `result.djRadios`，结果行点击进入 `Screen.PodcastDetail`。接口可用性未在本机验证。
