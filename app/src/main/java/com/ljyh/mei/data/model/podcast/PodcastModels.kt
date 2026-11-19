@@ -16,6 +16,17 @@ data class SubscribedRadios(
     val count: Int = 0,
     val hasMore: Boolean = false,
     val djRadios: List<DjRadio> = emptyList(),
+    /** 少数客户端协议版本会把列表放在 data 里，做一层兼容。 */
+    val data: SubscribedRadioPage? = null,
+) {
+    val items: List<DjRadio> get() = djRadios.ifEmpty { data?.djRadios.orEmpty() }
+}
+
+@Serializable
+data class SubscribedRadioPage(
+    val djRadios: List<DjRadio> = emptyList(),
+    val hasMore: Boolean = false,
+    val count: Int = 0,
 )
 
 @Serializable

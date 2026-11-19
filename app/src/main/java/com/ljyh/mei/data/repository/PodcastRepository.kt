@@ -18,7 +18,7 @@ class PodcastRepository @Inject constructor(
         safeApiCall {
             val response = weApiService.getSubscribedRadios(limit = limit, offset = offset)
             if (response.code == 200 || response.code == 0) {
-                response.djRadios.filter { it.id > 0 }
+                response.items.filter { it.id > 0 }
             } else {
                 throw IllegalStateException(
                     if (response.code == 301) "请先登录网易云账号" else "获取播客列表失败 (${response.code})"
