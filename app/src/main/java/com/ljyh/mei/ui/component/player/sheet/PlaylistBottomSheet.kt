@@ -308,7 +308,8 @@ private fun QueueTrackRow(
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = if (isCurrentPlaying) FontWeight.Bold else FontWeight.Medium,
                 color = titleColor,
-                maxLines = 1,
+                // 播客标题常带部和集数（「王玥波雍正剑侠图第7部 132」），单行会把末尾数字吃掉。
+                maxLines = if (metadata?.isPodcast == true) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(

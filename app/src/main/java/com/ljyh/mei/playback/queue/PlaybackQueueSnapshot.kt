@@ -17,10 +17,47 @@ internal data class PlaybackQueueSnapshot(
     val isFmMode: Boolean = false,
     /** Null in snapshots written before per-song sources were introduced. */
     val entries: List<QueueEntrySnapshot>? = null,
+    /**
+     * 播客队列里每个节目的元数据。
+     *
+     * 播客的 `mainSong.id` 拿去 `/song/detail` 查不到标题和封面（只有时长），
+     * 所以恢复时不能像普通歌曲那样只留 id 等接口补全，否则队列里会出现
+     * 「没有图标、没有标题、只有一个时长」的空行。整队列一起存下来，
+     * 体积约 25KB（161 集），只在播客队列里才有这个字段。
+     */
+    val podcasts: List<PodcastQueueSong>? = null,
 )
 
 @Serializable
 internal data class QueueEntrySnapshot(val entryId: String, val source: QueueSource? = null)
+
+/** 恢复队列用的播客节目元数据，字段刻意保持精简。 */
+@Serializable
+internal data class PodcastQueueSong(
+    val id: String,
+    val title: String,
+    val cover: String = "",
+    val artist: String = "",
+    val album: String = "",
+    val duration: Long = 0,
+    val artistId: Long = 0,
+)
+
+internal fun PodcastQueueSong.toMediaMetadata(): MediaMetadata {
+    val songId = id.toLongOrNull() ?: 0L
+    return MediaMetadata(
+        id = songId,
+        title = title,
+        coverUrl = cover,
+        artists = listOf(
+            MediaMetadata.Artist(id = artistId, name = artist.ifBlank { "网易云播客" })
+        ),
+        duration = duration,
+        album = MediaMetadata.Album(id = 0, title = album),
+        isPodcast = true,
+        neteaseId = songId,
+    )
+}
 
 internal object PlaybackQueueSnapshotCodec {
     private val json = Json {
@@ -40,6 +77,8 @@ internal object PlaybackQueueSnapshotCodec {
                     snapshot.positionMs >= 0L &&
                     (snapshot.entries == null || (snapshot.entries.size == snapshot.ids.size &&
                         snapshot.entries.all { it.entryId.isNotBlank() })) &&
+                    (snapshot.podcasts == null || (snapshot.podcasts.isNotEmpty() &&
+                        snapshot.podcasts.all { it.id.isNotBlank() })) &&
                     (snapshot.currentSong == null ||
                         snapshot.currentSong.id.toString() == snapshot.ids[snapshot.currentIndex])
             }

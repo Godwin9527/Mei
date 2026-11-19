@@ -97,10 +97,12 @@ import com.ljyh.mei.playback.lyrics.PlaybackLyricsController
 import com.ljyh.mei.playback.queue.PlaybackQueueManager
 import com.ljyh.mei.playback.queue.PlaybackQueueSnapshot
 import com.ljyh.mei.playback.queue.PlaybackQueueSnapshotCodec
+import com.ljyh.mei.playback.queue.PodcastQueueSong
 import com.ljyh.mei.playback.queue.QueueEntrySnapshot
 import com.ljyh.mei.playback.queue.QueueSource
 import com.ljyh.mei.playback.queue.queueEntryId
 import com.ljyh.mei.playback.queue.queueSource
+import com.ljyh.mei.playback.queue.toMediaMetadata
 import com.ljyh.mei.playback.queue.withQueueEntry
 import com.ljyh.mei.playback.sleep.SleepDetectionController
 import com.ljyh.mei.playback.sleep.SleepTimer
@@ -482,11 +484,18 @@ class MusicService : MediaLibraryService(),
                 val playerWasEmpty = player.mediaItemCount == 0
                 if (playerWasEmpty && snapshot != null) {
                     queueManager.isFmMode = snapshot.isFmMode
+                    // 播客的 mainSong.id 在 /song/detail 里查不到标题与封面，只靠占位符
+                    // 补全会留下一堆「只有时长」的空行，所以优先用快照里的节目元数据重建。
+                    val podcastById = snapshot.podcasts?.associateBy { it.id }.orEmpty()
                     val items = snapshot.ids.mapIndexed { index, id ->
-                        val item = if (index == snapshot.currentIndex && snapshot.currentSong != null) {
-                            snapshot.currentSong.toMediaItem()
-                        } else {
-                            createPlaceholder(id)
+                        val item = when {
+                            index == snapshot.currentIndex && snapshot.currentSong != null ->
+                                snapshot.currentSong.toMediaItem()
+
+                            podcastById[id] != null ->
+                                podcastById.getValue(id).toMediaMetadata().toMediaItem()
+
+                            else -> createPlaceholder(id)
                         }
                         val entry = snapshot.entries?.getOrNull(index)
                         item.withQueueEntry(entry?.source, entry?.entryId ?: java.util.UUID.randomUUID().toString())
@@ -610,16 +619,23 @@ class MusicService : MediaLibraryService(),
     }
 
     private suspend fun savePlaybackQueue() {
-        val snapshot = if (player.mediaItemCount > 0 && player.currentMediaItemIndex >= 0) {
+        // 一次取快照：ids / entries / podcasts 必须来自同一个队列状态，
+        // 否则长度不一致会被 decode 校验判为损坏，整份快照直接丢掉。
+        val items = player.mediaItems
+        val snapshot = if (items.isNotEmpty()) {
+            val ids = items.map(MediaItem::mediaId)
+            val index = player.currentMediaItemIndex.coerceIn(0, items.lastIndex)
             PlaybackQueueSnapshot(
-                ids = player.mediaItems.map(MediaItem::mediaId),
-                entries = player.mediaItems.map { item ->
+                ids = ids,
+                entries = items.map { item ->
                     QueueEntrySnapshot(item.queueEntryId ?: java.util.UUID.randomUUID().toString(), item.queueSource)
                 },
-                currentIndex = player.currentMediaItemIndex,
+                currentIndex = index,
                 positionMs = player.currentPosition.coerceAtLeast(0L),
-                currentSong = snapshotCurrentSong(),
+                // 只有 id 对得上才存，否则整份快照会被 decode 校验判为损坏。
+                currentSong = snapshotCurrentSong()?.takeIf { it.id.toString() == ids[index] },
                 isFmMode = queueManager.isFmMode,
+                podcasts = snapshotPodcastSongs(items),
             )
         } else null
         try {
@@ -647,6 +663,27 @@ class MusicService : MediaLibraryService(),
             )
         }
         return current?.takeIf { it.id.toString() == item.mediaId }
+    }
+
+    /**
+     * 收起队列里的播客节目元数据。只有队列里真的混着播客时才返回非空，
+     * 普通歌单不会因此变大。
+     */
+    private fun snapshotPodcastSongs(items: List<MediaItem>): List<PodcastQueueSong>? {
+        val podcasts = items.mapNotNull { item ->
+            val meta = item.localConfiguration?.tag as? MediaMetadata
+            if (meta?.isPodcast != true) return@mapNotNull null
+            PodcastQueueSong(
+                id = item.mediaId,
+                title = meta.title,
+                cover = meta.coverUrl,
+                artist = meta.artists.joinToString(", ") { it.name },
+                album = meta.album.title,
+                duration = meta.duration,
+                artistId = meta.artists.firstOrNull()?.id ?: 0L,
+            )
+        }
+        return podcasts.takeIf { it.isNotEmpty() }
     }
 
     override fun onEvents(player: Player, events: Player.Events) {

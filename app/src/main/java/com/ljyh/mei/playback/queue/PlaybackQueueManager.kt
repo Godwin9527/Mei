@@ -326,7 +326,12 @@ class PlaybackQueueManager(
             val loadedItems = withContext(Dispatchers.IO) { loadSongDetails(itemsNeedLoading) }
             if (loadedItems.isNotEmpty()) {
                 if (player.mediaItemCount == 0) return
-                val loadedById = loadedItems.associateBy(MediaItem::mediaId)
+                // 播客的 mainSong.id 在 /song/detail 里通常只返回时长，标题和封面是空的。
+                // 拿这种残缺数据替换占位符，队列里就会多出「没有图标、没有标题、只剩一个时长」
+                // 的空行；宁可保留占位符，等播出队列快照里的节目元数据来补。
+                val loadedById = loadedItems
+                    .filter { it.mediaMetadata.title?.isNotBlank() == true }
+                    .associateBy(MediaItem::mediaId)
                 // A song can appear more than once in the queue. Resolve every matching
                 // placeholder, including occurrences outside this request's visible range.
                 for (index in 0 until player.mediaItemCount) {

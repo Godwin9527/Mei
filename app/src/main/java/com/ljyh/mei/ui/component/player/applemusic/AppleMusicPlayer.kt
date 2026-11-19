@@ -395,10 +395,20 @@ fun AppleMusicPlayer(
         // The graphics layer scales around its center. Interpolate the visible artwork bounds,
         // then convert back to the layer's layout bounds; otherwise the shrinking scale adds a
         // second vertical motion near the lyric header (and on the way back).
+        //
+        // 播放时封面会从 0.85 放大到 1.0（约 +17.6%）。若按中心向四周扩，视觉下沿会多出
+        // (expandedVisualSize - expandedSize)/2 ≈ 20~30dp，正好压住下方标题的第一行。
+        // 所以放大改成「底部固定、向上生长」：视觉下沿始终停在 expandedTop + expandedSize。
+        val artworkBottom = expandedTop + expandedSize
+        val desiredVisualTop = artworkBottom - expandedVisualSize
+        val normalPathBounds = Rect(
+            // 小屏上向上扩张可能顶进状态栏，此时以安全区下沿为准。
+            Offset(expandedStart - expandedVisualInset, maxOf(desiredVisualTop, topSafeArea)),
+            Size(expandedVisualSize, expandedVisualSize),
+        )
         val visualBounds = resolveAppleArtworkBounds(
             miniBounds = Rect(Offset(miniStart, miniTop), Size(miniSize, miniSize)),
-            normalPathBounds = Rect(Offset(expandedStart - expandedVisualInset, expandedTop - expandedVisualInset),
-                Size(expandedVisualSize, expandedVisualSize)),
+            normalPathBounds = normalPathBounds,
             headerBounds = Rect(Offset(headerStart, headerTop), Size(headerSize, headerSize)),
             sheetProgress = coverProgress,
             headerProgress = lyricAnimFraction,
