@@ -143,6 +143,7 @@ internal fun SearchResultScreen(
         onArtist = { Screen.Artist.navigate(navController) { addPath(it.id.toString()) } },
         onAlbum = { Screen.Album.navigate(navController) { addPath(it.id.toString()) } },
         onPlaylist = { Screen.PlayList.navigate(navController) { addPath(it.id.toString()) } },
+        onPodcast = { Screen.PodcastDetail.navigate(navController) { addPath(it.toString()) } },
         onType = viewModel::onTabChange,
         playingId = metadata?.id?.takeIf { playing },
     )
@@ -293,6 +294,7 @@ internal data class SearchActions(
     val onArtist: (SearchArtist) -> Unit,
     val onAlbum: (SearchAlbum) -> Unit,
     val onPlaylist: (SearchPlaylist) -> Unit,
+    val onPodcast: (Long) -> Unit,
     val onType: (SearchType) -> Unit,
     val playingId: Long?,
 )
@@ -395,6 +397,19 @@ private fun SearchResultPage(
                         SearchType.Artist -> items(data.artists, key = { "artist-${it.id}" }) { SearchArtistRow(it, words, actions.onArtist) }
                         SearchType.Album -> items(data.albums, key = { "album-${it.id}" }) { SearchAlbumRow(it, words, actions.onAlbum) }
                         SearchType.Playlist -> items(data.playlists, key = { "playlist-${it.id}" }) { SearchPlaylistRow(it, words, actions.onPlaylist) }
+                        SearchType.Podcast -> items(data.radios, key = { "radio-${it.id}" }) { radio ->
+                            SearchEntityRow(
+                                title = radio.name,
+                                subtitle = listOfNotNull(
+                                    radio.djName.takeIf { it.isNotBlank() },
+                                    radio.programCount.takeIf { it > 0 }?.let { "$it 个节目" },
+                                ).joinToString(" · "),
+                                image = radio.coverUrl,
+                                words = words,
+                                titleLines = 2,
+                                onClick = { actions.onPodcast(radio.id) },
+                            )
+                        }
                         else -> Unit
                     }
                     if (page.appending || page.appendError || data.hasMore) item("pagination") {

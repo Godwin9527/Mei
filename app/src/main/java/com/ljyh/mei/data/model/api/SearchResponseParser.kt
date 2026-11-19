@@ -14,6 +14,7 @@ internal object SearchResponseParser {
             100 -> "artists" to "artistCount"
             10 -> "albums" to "albumCount"
             1000 -> "playlists" to "playlistCount"
+            1009 -> "djRadios" to "djRadiosCount"
             else -> error("不支持的搜索分类")
         }
         val rows = result.objects(key)
@@ -28,6 +29,7 @@ internal object SearchResponseParser {
             artists = if (type == 100) rows.mapNotNull(::artist).distinctBy { it.id } else emptyList(),
             albums = if (type == 10) rows.mapNotNull(::album).distinctBy { it.id } else emptyList(),
             playlists = if (type == 1000) rows.mapNotNull(::playlist).distinctBy { it.id } else emptyList(),
+            radios = if (type == 1009) rows.mapNotNull(::radio).distinctBy { it.id } else emptyList(),
             totalCount = count,
             hasMore = rows.isNotEmpty() && more,
             nextOffset = next,
@@ -118,6 +120,19 @@ internal object SearchResponseParser {
         return SearchPlaylist(id, title, value.text("coverImgUrl"), creator.number("userId") ?: 0,
             creator.text("nickname"), creator.text("avatarUrl"), value.number("trackCount")?.toInt() ?: 0,
             value.number("playCount"))
+    }
+
+    private fun radio(value: JsonObject): SearchRadio? {
+        val id = value.number("id")?.takeIf { it > 0 } ?: return null
+        val name = value.text("name").takeIf(String::isNotBlank) ?: return null
+        val dj = value.obj("dj") ?: JsonObject(emptyMap())
+        return SearchRadio(
+            id = id,
+            name = name,
+            coverUrl = value.text("picUrl"),
+            programCount = value.number("programCount")?.toInt() ?: 0,
+            djName = dj.text("nickname"),
+        )
     }
 
     private fun JsonObject.cover(): String = text("picUrl").ifBlank {

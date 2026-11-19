@@ -15,6 +15,7 @@ import com.ljyh.mei.data.model.room.CachedLyric
 import com.ljyh.mei.data.model.room.HistoryItem
 import com.ljyh.mei.data.model.room.Like
 import com.ljyh.mei.data.model.room.PlaybackHistory
+import com.ljyh.mei.data.model.room.PlaybackProgress
 import com.ljyh.mei.data.model.room.Song
 import kotlinx.coroutines.flow.Flow
 
@@ -114,6 +115,27 @@ interface HistoryDao {
 
     @Query("DELETE FROM playback_history WHERE songId = :songId")
     suspend fun deleteHistoryBySongId(songId: String)
+}
+
+@Dao
+interface PlaybackProgressDao {
+    @Query("SELECT * FROM playback_progress WHERE songId = :songId")
+    suspend fun get(songId: String): PlaybackProgress?
+
+    @Query("SELECT * FROM playback_progress ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<PlaybackProgress>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(progress: PlaybackProgress)
+
+    @Query("DELETE FROM playback_progress WHERE songId = :songId")
+    suspend fun delete(songId: String)
+
+    @Query("DELETE FROM playback_progress WHERE songId IN (:songIds)")
+    suspend fun deleteByIds(songIds: List<String>)
+
+    @Query("DELETE FROM playback_progress")
+    suspend fun clear()
 }
 
 @Dao

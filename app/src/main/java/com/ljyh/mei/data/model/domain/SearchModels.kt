@@ -27,11 +27,20 @@ data class SearchPlaylist(
     val playCount: Long? = null,
 )
 
+data class SearchRadio(
+    val id: Long,
+    val name: String,
+    val coverUrl: String,
+    val programCount: Int,
+    val djName: String,
+)
+
 data class SearchResults(
     val songs: List<MediaMetadata> = emptyList(),
     val artists: List<SearchArtist> = emptyList(),
     val albums: List<SearchAlbum> = emptyList(),
     val playlists: List<SearchPlaylist> = emptyList(),
+    val radios: List<SearchRadio> = emptyList(),
     val bestMatches: List<SearchMatch> = emptyList(),
     val recommendations: List<MediaMetadata> = emptyList(),
     val highlightWords: List<String> = emptyList(),
@@ -40,13 +49,14 @@ data class SearchResults(
     val nextOffset: Int = 0,
 ) {
     val isEmpty: Boolean get() = songs.isEmpty() && artists.isEmpty() && albums.isEmpty() &&
-        playlists.isEmpty() && bestMatches.isEmpty() && recommendations.isEmpty()
+        playlists.isEmpty() && radios.isEmpty() && bestMatches.isEmpty() && recommendations.isEmpty()
 
     fun append(page: SearchResults) = copy(
         songs = (songs + page.songs).distinctBy { it.id },
         artists = (artists + page.artists).distinctBy { it.id },
         albums = (albums + page.albums).distinctBy { it.id },
         playlists = (playlists + page.playlists).distinctBy { it.id },
+        radios = (radios + page.radios).distinctBy { it.id },
         totalCount = page.totalCount ?: totalCount,
         hasMore = page.hasMore,
         nextOffset = page.nextOffset,

@@ -11,6 +11,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BlurOn
 import androidx.compose.material.icons.rounded.FormatBold
+import androidx.compose.material.icons.rounded.FormatSize
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Kitesurfing
 import androidx.compose.material.icons.rounded.LinearScale
@@ -53,6 +55,9 @@ import com.ljyh.mei.constants.ThemeColorKey
 import com.ljyh.mei.constants.updateDynamicCoverSettings
 import com.ljyh.mei.constants.AppleMotionEnglishTitlesOnlyKey
 import com.ljyh.mei.constants.OriginalCoverKey
+import com.ljyh.mei.constants.DefaultPodcastTextSize
+import com.ljyh.mei.constants.PlayerTitleFontSizeKey
+import com.ljyh.mei.constants.PodcastTextSizeKey
 import com.ljyh.mei.constants.HidePlayerTitleBracketsKey
 import com.ljyh.mei.constants.PlaylistCoverStyle
 import com.ljyh.mei.constants.PlaylistCoverStyleKey
@@ -89,10 +94,13 @@ import com.ljyh.mei.utils.preferences.rememberPreference
 import com.ljyh.mei.utils.preferences.dataStore
 import kotlinx.coroutines.launch
 
+// 0 表示沿用主题默认字号，其余直接给像素值，便于逐级微调。
+private val PlayerTitleSizeOptions = listOf(0, 16, 18, 20, 22, 24, 26, 28, 30)
+private val PodcastTextSizeOptions = listOf(12, 13, 14, 15, 16, 17, 18, 20, 22)
+
 private val themeColorPresets = listOf(
     ColorPreset("蓝色", Color(0xFF0061A4)),
-    ColorPreset("紫色", Color(0xFF6750A4)),
-    ColorPreset("红色", Color(0xFFB3261E)),
+    ColorPreset("紫色", Color(0xFF6750A4)),    ColorPreset("红色", Color(0xFFB3261E)),
     ColorPreset("洋红", Color(0xFFB91690)),
     ColorPreset("青绿", Color(0xFF008577)),
     ColorPreset("绿色", Color(0xFF34883F)),
@@ -140,6 +148,12 @@ fun AppearanceSettingsScreen(
     )
     val (hideTitleBrackets, onHideTitleBracketsChange) = rememberPreference(
         HidePlayerTitleBracketsKey, defaultValue = false
+    )
+    val (playerTitleSize, onPlayerTitleSizeChange) = rememberPreference(
+        PlayerTitleFontSizeKey, defaultValue = 0
+    )
+    val (podcastTextSize, onPodcastTextSizeChange) = rememberPreference(
+        PodcastTextSizeKey, defaultValue = DefaultPodcastTextSize
     )
     val (debug, onDebug) = rememberPreference(
         DebugKey, defaultValue = false
@@ -285,6 +299,24 @@ fun AppearanceSettingsScreen(
                     icon = { Icon(Icons.Rounded.FormatBold, null) },
                     checked = hideTitleBrackets,
                     onCheckedChange = onHideTitleBracketsChange,
+                )
+                ListPreference(
+                    title = { Text("播放器标题字号") },
+                    description = if (playerTitleSize == 0) "跟随主题默认" else "${playerTitleSize}px",
+                    icon = { Icon(Icons.Rounded.FormatSize, null) },
+                    selectedValue = playerTitleSize,
+                    values = PlayerTitleSizeOptions,
+                    valueText = { if (it == 0) "默认" else "${it}px" },
+                    onValueSelected = onPlayerTitleSizeChange,
+                )
+                ListPreference(
+                    title = { Text("播客界面字号") },
+                    description = "影响播客列表、节目列表和播客播放页标题",
+                    icon = { Icon(Icons.Rounded.Mic, null) },
+                    selectedValue = podcastTextSize,
+                    values = PodcastTextSizeOptions,
+                    valueText = { "${it}px" },
+                    onValueSelected = onPodcastTextSizeChange,
                 )
 
                 // 原图封面

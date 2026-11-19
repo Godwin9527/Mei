@@ -221,6 +221,15 @@ class MusicService : MediaLibraryService(),
     lateinit var historyRepository: HistoryRepository
 
     @Inject
+    lateinit var progressRepository: com.ljyh.mei.di.repository.PlaybackProgressRepository
+
+    // 每秒采样一次当前曲目位置；切歌时把上一曲的最后位置落库，避免丢掉最后几秒。
+    private var progressSampleJob: Job? = null
+    private var sampledMediaId: String? = null
+    private var sampledPositionMs: Long = 0L
+    private var sampledDurationMs: Long = 0L
+
+    @Inject
     lateinit var songRepository: SongRepository
     @Inject
     lateinit var lyricManager: LyricManager
@@ -327,6 +336,7 @@ class MusicService : MediaLibraryService(),
         audioEffectsController = AudioEffectsController(this, scope, parametricEqualizerProcessor, reverbProcessor, limiterProcessor)
         standbyAudioEffectsController = AudioEffectsController(this, scope, standbyEqualizerProcessor)
         observeAutoEq(scope)
+        startProgressSampling()
 
         audioPlayer = AudioPlayer(player)
         transitionController = SmartTransitionController(
@@ -505,6 +515,88 @@ class MusicService : MediaLibraryService(),
             } finally {
                 restoringQueue = false
             }
+        }
+    }
+
+    /**
+     * 每 10 秒把当前曲目进度落库；另外每秒更新一次内存采样，
+     * 切歌时用采样值补写上一曲，保证最后几秒不会丢。
+     */
+    private fun startProgressSampling() {
+        if (progressSampleJob != null) return
+        progressSampleJob = scope.launch {
+            var ticks = 0
+            while (isActive) {
+                delay(1000)
+                ticks++
+                sampleProgress(persist = ticks % 10 == 0)
+            }
+        }
+    }
+
+    private fun sampleProgress(persist: Boolean) {
+        val item = player.currentMediaItem ?: return
+        val id = item.mediaId
+        val position = player.currentPosition.coerceAtLeast(0L)
+        val duration = player.duration.takeIf { it > 0 }
+            ?: item.mediaMetadata.durationMs
+            ?: 0L
+        val previousId = sampledMediaId
+        if (previousId != null && previousId != id) {
+            persistProgress(previousId, sampledPositionMs, sampledDurationMs)
+        }
+        sampledMediaId = id
+        sampledPositionMs = position
+        sampledDurationMs = duration
+        if (persist && position > 0) persistProgress(id, position, duration)
+    }
+
+    private fun persistProgress(id: String, positionMs: Long, durationMs: Long) {
+        if (id.isBlank() || positionMs <= 0) return
+        scope.launch {
+            try {
+                progressRepository.record(id, positionMs, durationMs)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.tag("MusicService").e(e, "save playback progress failed")
+            }
+        }
+    }
+
+    /** 切到某曲目后，若有上次未听完的进度则跳过去并提示一次。 */
+    private fun resumeFromProgress(mediaId: String) {
+        if (mediaId.isBlank()) return
+        scope.launch {
+            val position = try {
+                progressRepository.resumePositionOf(mediaId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            } ?: return@launch
+            if (player.currentMediaItem?.mediaId != mediaId) return@launch
+            val duration = player.duration.takeIf { it > 0 } ?: 0L
+            if (duration > 0 && position >= duration) return@launch
+            if (kotlin.math.abs(player.currentPosition - position) < 3000) return@launch
+            player.seekTo(position)
+            Toast.makeText(
+                context,
+                "从 ${formatProgressTime(position)} 继续播放",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
+    private fun formatProgressTime(positionMs: Long): String {
+        val totalSeconds = positionMs / 1000
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        return if (hours > 0) {
+            String.format(getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(getDefault(), "%02d:%02d", minutes, seconds)
         }
     }
 
@@ -776,6 +868,17 @@ class MusicService : MediaLibraryService(),
         if (!restoringQueue) {
             runBlocking { savePlaybackQueue() }
         }
+        progressSampleJob?.cancel()
+        if (!restoringQueue) {
+            val progressId = sampledMediaId
+            if (progressId != null && sampledPositionMs > 0) {
+                runBlocking {
+                    runCatching {
+                        progressRepository.record(progressId, sampledPositionMs, sampledDurationMs)
+                    }
+                }
+            }
+        }
         transitionController.release()
         playbackLyricsController.close()
         colorOsLyricsPublisher?.close()
@@ -960,6 +1063,11 @@ class MusicService : MediaLibraryService(),
         if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
             reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) {
             checkFmModeLoadMore()
+        }
+        // 换到另一首时才处理记忆播放；单曲循环重播不应跳回上一轮的进度。
+        if (mediaItem != null && reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
+            sampleProgress(persist = false)
+            resumeFromProgress(mediaItem.mediaId)
         }
     }
 

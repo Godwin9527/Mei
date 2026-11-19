@@ -2,6 +2,7 @@ package com.ljyh.mei.di
 
 import android.content.Context
 import com.ljyh.mei.di.dao.SongDao
+import com.ljyh.mei.di.dao.PlaybackProgressDao
 import com.ljyh.mei.di.repository.AlbumsRepository
 import com.ljyh.mei.di.repository.CachedLyricRepository
 import com.ljyh.mei.di.repository.ColorRepository
@@ -69,4 +70,8 @@ object AppModule {
     @Provides
     fun provideCachedLyricDao(db: AppDatabase): CachedLyricRepository =
         CachedLyricRepository(db.cachedLyricDao())
+
+    @Provides
+    fun providePlaybackProgressDao(db: AppDatabase): PlaybackProgressDao =
+        db.playbackProgressDao()
 }

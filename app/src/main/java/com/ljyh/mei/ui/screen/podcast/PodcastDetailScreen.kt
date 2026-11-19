@@ -1,5 +1,6 @@
 package com.ljyh.mei.ui.screen.podcast
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -8,14 +9,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -26,10 +25,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -37,13 +42,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,6 +59,8 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.ljyh.mei.constants.CommonImageRadius
+import com.ljyh.mei.constants.DefaultPodcastTextSize
+import com.ljyh.mei.constants.PodcastTextSizeKey
 import com.ljyh.mei.data.model.domain.toMediaItem
 import com.ljyh.mei.data.model.domain.toMediaMetadata
 import com.ljyh.mei.data.model.podcast.DjProgram
@@ -66,13 +75,14 @@ import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
 import com.ljyh.mei.ui.local.LocalPlayerConnection
 import com.ljyh.mei.utils.TimeUtils
+import com.ljyh.mei.utils.preferences.rememberPreference
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** 单个电台的节目列表：可排序、可翻页、点任意一期直接播放（队列为该电台的节目顺序）。 */
+/** 单个电台的节目列表：可排序、可搜索、点任意一期直接播放（队列为该电台的当前排序）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PodcastDetailScreen(
@@ -81,23 +91,15 @@ fun PodcastDetailScreen(
 ) {
     val nav = LocalNavController.current
     val playerConnection = LocalPlayerConnection.current
+    val context = LocalContext.current
     val state by viewModel.programs.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val pageHaze = rememberHazeState()
+    val (textSize, _) = rememberPreference(PodcastTextSizeKey, DefaultPodcastTextSize)
+    var menuOpen by remember { mutableStateOf(false) }
+    var confirmClear by remember { mutableStateOf(false) }
 
     LaunchedEffect(radioId) { viewModel.openRadio(radioId) }
-
-    // 滚到接近底部时自动加载下一页。
-    val shouldLoadMore by remember {
-        derivedStateOf {
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
-            info.totalItemsCount > 0 && last >= info.totalItemsCount - 3
-        }
-    }
-    LaunchedEffect(shouldLoadMore, state.hasMore) {
-        if (shouldLoadMore && state.hasMore) viewModel.loadMore()
-    }
 
     val radio = state.radio
     val title = radio?.name?.takeIf { it.isNotBlank() } ?: "播客"
@@ -129,6 +131,22 @@ fun PodcastDetailScreen(
                     )
                 },
                 navigationIcon = { MeiGlassBackButton(onClick = { nav.popBackStack() }) },
+                actions = {
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Rounded.MoreVert, contentDescription = "更多")
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("清除本电台播放记忆") },
+                                onClick = {
+                                    menuOpen = false
+                                    confirmClear = true
+                                },
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     scrolledContainerColor = MaterialTheme.colorScheme.background,
@@ -147,6 +165,16 @@ fun PodcastDetailScreen(
         ) {
             item(key = "podcast_header") {
                 PodcastHeader(radio = radio, total = state.total, fallbackTitle = title)
+            }
+            item(key = "podcast_search") {
+                PodcastSearchField(
+                    value = state.query,
+                    onValueChange = { viewModel.setQuery(it) },
+                    placeholder = "搜索本电台的节目",
+                    modifier = Modifier
+                        .padding(horizontal = meiPageGutter())
+                        .padding(bottom = 10.dp),
+                )
             }
             item(key = "podcast_sort") {
                 PodcastSortRow(
@@ -173,7 +201,7 @@ fun PodcastDetailScreen(
 
                 state.programs.isEmpty() -> item(key = "podcast_empty") {
                     MeiStatePanel(
-                        title = "这个电台还没有节目",
+                        title = if (state.query.isNotBlank()) "没有匹配的节目" else "这个电台还没有节目",
                         icon = Icons.Rounded.Mic,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                     )
@@ -186,6 +214,8 @@ fun PodcastDetailScreen(
                     PodcastProgramRow(
                         program = program,
                         index = index + 1,
+                        textSize = textSize,
+                        listenedMs = state.progressBySong[program.mainSong?.id?.toString()],
                         onClick = {
                             val songId = program.mainSong?.id?.takeIf { it > 0 } ?: return@PodcastProgramRow
                             playerConnection?.onTrackClicked(
@@ -198,22 +228,53 @@ fun PodcastDetailScreen(
                         },
                     )
                     HorizontalDivider(
-                        modifier = Modifier.padding(start = 76.dp, end = 16.dp),
+                        modifier = Modifier.padding(start = 64.dp, end = 16.dp),
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
                         thickness = 0.5.dp,
                     )
                 }
             }
-            if (state.loadingMore || state.hasMore) item(key = "podcast_more") {
+            if (state.loadingAll || state.error != null) item(key = "podcast_more") {
                 Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                    if (state.loadingMore) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    if (state.loadingAll) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "正在加载 ${state.loaded}/${maxOf(state.total, state.loaded)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     } else {
-                        TextButton(onClick = { viewModel.loadMore() }) { Text("加载更多") }
+                        TextButton(onClick = { viewModel.loadMore() }) { Text("加载中断，点此重试") }
                     }
                 }
             }
         }
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("清除播放记忆") },
+            text = { Text("将清空「$title」所有单集的收听进度，下次从每集开头播放。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    viewModel.clearRadioProgress { count ->
+                        Toast.makeText(
+                            context,
+                            if (count > 0) "已清除 $count 集的播放记忆" else "没有可清除的记忆",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }) { Text("清除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) { Text("取消") }
+            },
+        )
     }
 }
 
@@ -226,10 +287,10 @@ private fun PodcastHeader(radio: DjRadio?, total: Int, fallbackTitle: String) {
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .size(96.dp)
+                    .size(88.dp)
                     .clip(RoundedCornerShape(CommonImageRadius)),
             )
-            Spacer(Modifier.width(16.dp))
+            Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     radio?.name?.takeIf { it.isNotBlank() } ?: fallbackTitle,
@@ -287,7 +348,13 @@ private fun PodcastSortRow(selected: PodcastSort, onSelect: (PodcastSort) -> Uni
 }
 
 @Composable
-private fun PodcastProgramRow(program: DjProgram, index: Int, onClick: () -> Unit) {
+private fun PodcastProgramRow(
+    program: DjProgram,
+    index: Int,
+    textSize: Int,
+    listenedMs: Long?,
+    onClick: () -> Unit,
+) {
     val date = remember(program.createTime) {
         program.createTime.takeIf { it > 0 }?.let {
             SimpleDateFormat("yyyy/M/d", Locale.getDefault()).format(Date(it))
@@ -304,11 +371,11 @@ private fun PodcastProgramRow(program: DjProgram, index: Int, onClick: () -> Uni
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = meiPageGutter(), vertical = 10.dp),
+            .padding(horizontal = meiPageGutter(), vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            modifier = Modifier.size(48.dp).clip(RoundedCornerShape(CommonImageRadius)),
+            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(CommonImageRadius)),
         ) {
             AsyncImage(
                 model = program.coverUrl.orEmpty(),
@@ -321,18 +388,37 @@ private fun PodcastProgramRow(program: DjProgram, index: Int, onClick: () -> Uni
         Column(Modifier.weight(1f)) {
             Text(
                 program.name.ifBlank { "第 $index 期" },
-                style = MaterialTheme.typography.bodyLarge,
+                fontSize = textSize.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (meta.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    meta,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
+            if (meta.isNotBlank() || listenedMs != null) {
+                Spacer(Modifier.height(3.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        meta,
+                        fontSize = (textSize - 3).coerceAtLeast(10).sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (listenedMs != null) {
+                        if (meta.isNotBlank()) {
+                            Text(
+                                " · ",
+                                fontSize = (textSize - 3).coerceAtLeast(10).sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Text(
+                            "已听 ${TimeUtils.formatDuration(listenedMs)}",
+                            fontSize = (textSize - 3).coerceAtLeast(10).sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
         }
     }

@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
@@ -343,5 +344,6 @@ enum class SearchType(val icon: ImageVector, val type: Int, val displayName: Str
     Artist(Icons.Rounded.Person, 100, "歌手"),
     Album(Icons.Rounded.Album, 10, "专辑"),
     Playlist(Icons.AutoMirrored.Filled.PlaylistPlay, 1000, "歌单"),
+    Podcast(Icons.Rounded.Mic, 1009, "播客"),
     History(Icons.Rounded.History, -1, "历史")
 }

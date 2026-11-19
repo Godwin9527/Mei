@@ -87,7 +87,17 @@ val PhoneticLyricTextSizeKey = stringPreferencesKey("phoneticLyricTextSize")
 val PhoneticLyricTextBoldKey = booleanPreferencesKey("phoneticLyricTextBold")
 
 val LoopPlaybackKey = booleanPreferencesKey("loopPlayback")
-val KeepPlayerScreenOnKey = booleanPreferencesKey("keepPlayerScreenOn")
+
+// 字号（单位 sp，0 表示沿用主题默认值）。
+val PlayerTitleFontSizeKey = intPreferencesKey("appearance.playerTitleFontSize")
+val PodcastTextSizeKey = intPreferencesKey("appearance.podcastTextSize")
+const val DefaultPodcastTextSize = 15
+
+/** 播客节目列表排序方式，记住上次选择。 */
+val PodcastSortKey = stringPreferencesKey("podcast.sort")
+
+/** 音乐库区块顺序，按逗号分隔的区块 id 保存。 */
+val LibrarySectionOrderKey = stringPreferencesKey("library.sectionOrder")val KeepPlayerScreenOnKey = booleanPreferencesKey("keepPlayerScreenOn")
 val NoAudioSourceKey = booleanPreferencesKey("noAudioSource")
 val SmartTransitionEnabledKey = booleanPreferencesKey("smartTransition.enabled")
 val SmartTransitionModeKey = stringPreferencesKey("smartTransition.mode")

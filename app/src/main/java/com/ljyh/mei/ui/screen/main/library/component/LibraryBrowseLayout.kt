@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -73,6 +74,8 @@ fun LibraryBrowseLayout(
         }
     }
     val data = (state as? LibraryUiState.Content)?.data
+    val sectionOrder = rememberLibrarySectionOrder()
+    var showLayoutEditor by remember { mutableStateOf(false) }
     val composition = remember(data) { data?.dashboardSelection() }
     val collected = remember(data) { data?.playlistsIn(LibraryCollection.Collected).orEmpty() }
     val createdLimit = if (tablet) 8 else 4
@@ -158,6 +161,7 @@ fun LibraryBrowseLayout(
                                 preparingPlayback,
                                 canPlay,
                                 rowPadding,
+                                sectionOrder,
                                 onOpenPlaylist,
                                 onPlayLiked,
                                 onOpenAlbum,
@@ -303,7 +307,24 @@ fun LibraryBrowseLayout(
             }
         }
         MeiHazeTopBar(state = source, title = "音乐库", progress = progress,
-                actions = { com.ljyh.mei.ui.screen.profile.PersonalCenterEntry(onOpenProfile, data?.profile?.avatarUrl.takeIf { signedIn }) })
+                actions = {
+                    if (!tablet) {
+                        IconButton(onClick = { showLayoutEditor = true }) {
+                            Icon(Icons.Rounded.SwapVert, contentDescription = "调整音乐库顺序")
+                        }
+                    }
+                    com.ljyh.mei.ui.screen.profile.PersonalCenterEntry(
+                        onOpenProfile,
+                        data?.profile?.avatarUrl.takeIf { signedIn },
+                    )
+                })
+    }
+
+    if (showLayoutEditor) {
+        LibraryLayoutDialog(
+            order = sectionOrder,
+            onDismiss = { showLayoutEditor = false },
+        )
     }
 }
 
@@ -343,14 +364,51 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobileLibraryContent(
     preparingPlayback: Boolean,
     canPlay: Boolean,
     rowPadding: PaddingValues,
+    order: List<LibrarySection>,
     onOpenPlaylist: (String) -> Unit,
     onPlayLiked: (String) -> Unit,
     onOpenAlbum: (Long) -> Unit,
     onOpenCollection: (LibraryCollection) -> Unit,
 ) {
+    // 区块顺序由「调整音乐库顺序」决定，这里只按顺序把它们拼出来。
+    order.forEach { section ->
+        when (section) {
+            LibrarySection.LIKED -> mobileLikedSection(
+                data, likedArtwork, likedSongTitle, likedHeight,
+                preparingPlayback, canPlay, rowPadding, onOpenPlaylist, onPlayLiked,
+            )
+
+            LibrarySection.CREATED -> mobileCreatedSection(
+                data, columns, rowPadding, onOpenPlaylist, onOpenCollection,
+            )
+
+            LibrarySection.COLLECTED -> mobileCollectedSection(
+                data, columns, rowPadding, onOpenPlaylist, onOpenCollection,
+            )
+
+            LibrarySection.ALBUMS -> mobileAlbumsSection(
+                data, rowPadding, onOpenAlbum, onOpenCollection,
+            )
+
+            LibrarySection.PODCASTS -> item(key = "podcasts_entry") {
+                LibraryPodcastEntry(Modifier.padding(rowPadding))
+            }
+        }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.mobileLikedSection(
+    data: LibraryContentUiState,
+    likedArtwork: String?,
+    likedSongTitle: String?,
+    likedHeight: Dp,
+    preparingPlayback: Boolean,
+    canPlay: Boolean,
+    rowPadding: PaddingValues,
+    onOpenPlaylist: (String) -> Unit,
+    onPlayLiked: (String) -> Unit,
+) {
     val liked = data.likedPlaylist()
-    val created = data.createdPlaylistOverview()
-    val collected = data.playlistsIn(LibraryCollection.Collected)
     item(key = "mobile_liked") {
         LibraryLikedPlaylist(
             liked, likedArtwork, preparingPlayback, canPlay,
@@ -363,6 +421,16 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobileLibraryContent(
             songTitle = likedSongTitle, playAtBottom = true
         )
     }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.mobileCreatedSection(
+    data: LibraryContentUiState,
+    columns: Int,
+    rowPadding: PaddingValues,
+    onOpenPlaylist: (String) -> Unit,
+    onOpenCollection: (LibraryCollection) -> Unit,
+) {
+    val created = data.createdPlaylistOverview()
     item(key = "mobile_created_heading") {
         LibrarySectionHeading(
             "我创建的歌单",
@@ -400,6 +468,16 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobileLibraryContent(
             repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
         }
     }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.mobileCollectedSection(
+    data: LibraryContentUiState,
+    columns: Int,
+    rowPadding: PaddingValues,
+    onOpenPlaylist: (String) -> Unit,
+    onOpenCollection: (LibraryCollection) -> Unit,
+) {
+    val collected = data.playlistsIn(LibraryCollection.Collected)
     item(key = "mobile_collected_heading") {
         LibrarySectionHeading(
             "收藏歌单",
@@ -437,6 +515,14 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobileLibraryContent(
             repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
         }
     }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.mobileAlbumsSection(
+    data: LibraryContentUiState,
+    rowPadding: PaddingValues,
+    onOpenAlbum: (Long) -> Unit,
+    onOpenCollection: (LibraryCollection) -> Unit,
+) {
     item(key = "mobile_albums_heading") {
         LibrarySectionHeading("收藏专辑", true, Modifier
             .padding(rowPadding)
