@@ -13,7 +13,7 @@ data class QueueSource(
     val title: String? = null,
 ) {
     @Serializable
-    enum class Type { PLAYLIST, ALBUM, DAILY, LOCAL, SEARCH, ARTIST, HISTORY, RADIO, RECOMMENDATION, RECOGNITION, MANUAL, OTHER }
+    enum class Type { PLAYLIST, ALBUM, DAILY, LOCAL, SEARCH, ARTIST, HISTORY, RADIO, PODCAST, RECOMMENDATION, RECOGNITION, MANUAL, OTHER }
 
     val displayText: String
         get() {
@@ -26,6 +26,7 @@ data class QueueSource(
                 Type.ARTIST -> "歌手"
                 Type.HISTORY -> "最近播放"
                 Type.RADIO -> "私人 FM"
+                Type.PODCAST -> "播客"
                 Type.RECOMMENDATION -> "推荐"
                 Type.RECOGNITION -> "听歌识曲"
                 Type.MANUAL -> "手动添加"
@@ -39,6 +40,7 @@ data class QueueSource(
         fun fromQueue(id: String, title: String?): QueueSource = when {
             id.startsWith("playlist_") -> QueueSource(Type.PLAYLIST, id.removePrefix("playlist_"), title)
             id.startsWith("album_") -> QueueSource(Type.ALBUM, id.removePrefix("album_"), title)
+            id.startsWith("podcast_") -> QueueSource(Type.PODCAST, id.removePrefix("podcast_"), title)
             id == "dailySongs" -> QueueSource(Type.DAILY, id, title)
             id.startsWith("local_") -> QueueSource(Type.LOCAL, id, title)
             id.startsWith("SearchQueue-") -> QueueSource(Type.SEARCH, id, title)

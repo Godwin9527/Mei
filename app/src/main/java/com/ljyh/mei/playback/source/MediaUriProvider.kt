@@ -33,6 +33,9 @@ class SourceNotFoundException(message: String) : IOException(message)
 data class ResolvedMediaUri(val uri: Uri, val cacheKey: String)
 data class PlaybackSourceInfo(val name: String, val quality: String?)
 
+/** Podcast programmes only ship one 192 kbps mp3. */
+private const val PODCAST_LEVEL = "standard"
+
 @Singleton
 class MediaUriProvider @Inject constructor(
     @param:ApplicationContext private val context: Context,
@@ -57,6 +60,9 @@ class MediaUriProvider @Inject constructor(
     suspend fun resolveMediaUri(mediaId: String, quality: String): Uri = resolveMedia(mediaId, quality, recordPlayback = false).uri
 
     suspend fun resolveMedia(mediaId: String, quality: String, recordPlayback: Boolean = true): ResolvedMediaUri {
+        // Podcast programmes only exist as 192 kbps mp3 and must never fall back to other
+        // providers (that would waste 15s and then still fail).
+        val isPodcast = PodcastTrackRegistry.contains(mediaId)
         val baseKey = "$mediaId|${quality.lowercase()}|full-v1"
         val localPath = songRepository.getSong(mediaId).firstOrNull()?.path
             ?: songRepository.getSong("local_$mediaId").firstOrNull()?.path
@@ -79,19 +85,29 @@ class MediaUriProvider @Inject constructor(
             val (skipNetease, excluded) = recovery.snapshot(recoveryKey)
             try {
                 if (!skipNetease) {
-                    val response = apiService.getSongUrlV1(GetSongUrlV1(ids = "[$mediaId]", level = quality))
-                    val data = response.data.firstOrNull { it.id.toString() == mediaId } ?: response.data.firstOrNull()
-                    val url = data?.url?.takeIf { it.isNotBlank() }
-                    if (url != null && data.freeTrialInfo == null) {
-                        val duration = data.time?.takeIf { it > 0 } ?: probe.durationMs(url)
-                        if (duration != null && !PreviewPolicy.isPreview(duration)) {
-                            val resolved = CachedUrl(url, System.currentTimeMillis() + 10 * 60_000, baseKey,
-                                "netease", PlaybackSourceInfo("网易云", data.level), recoveryKey)
-                            urlCache[lookupKey] = resolved
-                            return@withLock selected(mediaId, resolved, recordPlayback)
+                    // Podcasts always ask for standard; regular songs retry once at standard level
+                    // when the requested level is unavailable instead of failing straight away.
+                    val levels = if (isPodcast) listOf(PODCAST_LEVEL)
+                    else buildList {
+                        add(quality.lowercase())
+                        if (quality.lowercase() != PODCAST_LEVEL) add(PODCAST_LEVEL)
+                    }
+                    for (level in levels) {
+                        val response = apiService.getSongUrlV1(GetSongUrlV1(ids = "[$mediaId]", level = level))
+                        val data = response.data.firstOrNull { it.id.toString() == mediaId } ?: response.data.firstOrNull()
+                        val url = data?.url?.takeIf { it.isNotBlank() }
+                        if (url != null && data.freeTrialInfo == null) {
+                            val duration = data.time?.takeIf { it > 0 } ?: probe.durationMs(url)
+                            if (duration != null && !PreviewPolicy.isPreview(duration)) {
+                                val resolved = CachedUrl(url, System.currentTimeMillis() + 10 * 60_000, baseKey,
+                                    "netease", PlaybackSourceInfo("网易云", data.level), recoveryKey)
+                                urlCache[lookupKey] = resolved
+                                return@withLock selected(mediaId, resolved, recordPlayback)
+                            }
                         }
                     }
                 }
+                if (isPodcast) throw SourceNotFoundException("该节目暂时无法播放，可能需要购买或已下架")
                 if (mode == AudioSourceMode.Off) throw SourceNotFoundException("网易云暂无可播放的完整音频，备用音源已关闭")
                 val target = target(mediaId) ?: throw SourceNotFoundException("歌曲信息不可用")
                 val resolved = mode.resolveAlternative(

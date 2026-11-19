@@ -31,6 +31,8 @@ data class MediaMetadata(
     // Local library IDs are not public catalogue IDs. Zero means no confirmed public ID;
     // a non-null sentinel also survives queue codecs that omit null properties.
     val neteaseId: Long = id.takeIf { it > 0 } ?: 0L,
+    // 播客节目：只有 mp3 192k，且不应走备用音源兜底。
+    val isPodcast: Boolean = false,
 ) {
     @Serializable
     data class Artist(
@@ -212,22 +214,32 @@ fun createPlaceholder(id: String): MediaItem {
 
 
 @OptIn(UnstableApi::class)
-fun MediaMetadata.toMediaItem() = MediaItem.Builder()
-    .setMediaId(id.toString())
-    .setUri(id.toString())
-    .setCustomCacheKey(id.toString())
-    .setTag(this)
-    .setMediaMetadata(
-        androidx.media3.common.MediaMetadata.Builder()
-            .setTitle(title)
-            .setSubtitle(artists.joinToString { it.name })
-            .setArtist(artists.joinToString { it.name })
-            .setAlbumTitle(album.title)
-            .setMediaType(MEDIA_TYPE_MUSIC)
-            .setArtworkUri(coverUrl.toUri())
-            .build()
-    )
-    .build()
+fun MediaMetadata.toMediaItem(): MediaItem {
+    // Register before the data source resolves the id so podcasts skip lossless/backup sources.
+    if (isPodcast) com.ljyh.mei.playback.source.PodcastTrackRegistry.mark(id.toString())
+    return MediaItem.Builder()
+        .setMediaId(id.toString())
+        .setUri(id.toString())
+        .setCustomCacheKey(id.toString())
+        .setTag(this)
+        .setMediaMetadata(
+            androidx.media3.common.MediaMetadata.Builder()
+                .setTitle(title)
+                .setSubtitle(artists.joinToString { it.name })
+                .setArtist(artists.joinToString { it.name })
+                .setAlbumTitle(album.title)
+                .setMediaType(MEDIA_TYPE_MUSIC)
+                .setArtworkUri(coverUrl.toUri())
+                .setDurationMs(duration)
+                // 播放历史从 extras 里读歌手列表，播客因此能显示主播名而不是「未知歌手」。
+                .setExtras(Bundle().apply {
+                    putLong("duration", duration)
+                    putStringArrayList("artist_list", ArrayList(artists.map { it.name }))
+                })
+                .build()
+        )
+        .build()
+}
 
 
 

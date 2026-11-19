@@ -1,6 +1,8 @@
 package com.ljyh.mei.data.network.api
 
 import com.ljyh.mei.data.model.api.GetFloorComment
+import com.ljyh.mei.data.model.podcast.RadioPrograms
+import com.ljyh.mei.data.model.podcast.SubscribedRadios
 import com.ljyh.mei.data.model.response.AlbumDynamic
 import com.ljyh.mei.data.model.response.UserVipInfo
 import com.ljyh.mei.data.model.weapi.EveryDaySongs
@@ -42,4 +44,27 @@ class WeApiService(private val http: NeteaseHttp) {
 
     suspend fun getFloorComment(body: GetFloorComment): FloorComment =
         http.post(base, "/weapi/resource/comment/floor/get", body)
+
+    // ---------- 播客（电台） ----------
+    // 该接口必须登录（MUSIC_U），未登录只返回空列表或 301。
+    suspend fun getSubscribedRadios(limit: Int = 50, offset: Int = 0): SubscribedRadios =
+        http.post(
+            base, "/weapi/djradio/get/subed",
+            mapOf("limit" to limit.toString(), "offset" to offset.toString(), "total" to "true"),
+        )
+
+    suspend fun getRadioPrograms(
+        radioId: Long,
+        limit: Int = 30,
+        offset: Int = 0,
+        asc: Boolean = false,
+    ): RadioPrograms = http.post(
+        base, "/weapi/dj/program/byradio",
+        mapOf(
+            "radioId" to radioId.toString(),
+            "limit" to limit.toString(),
+            "offset" to offset.toString(),
+            "asc" to asc.toString(),
+        ),
+    )
 }

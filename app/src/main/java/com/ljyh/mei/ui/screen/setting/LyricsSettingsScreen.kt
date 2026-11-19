@@ -44,6 +44,7 @@ import com.ljyh.mei.constants.DefaultDesktopLyricsTextColor
 import com.ljyh.mei.constants.DefaultDesktopLyricsTranslationColor
 import com.ljyh.mei.constants.DefaultDesktopLyricsTranslationFontSize
 import com.ljyh.mei.constants.LyricTextSize
+import com.ljyh.mei.constants.LyricsControlsAutoHideKey
 import com.ljyh.mei.constants.NormalLyricTextBoldKey
 import com.ljyh.mei.constants.NormalLyricTextSizeKey
 import com.ljyh.mei.constants.SeekOnLyricTapKey
@@ -89,6 +90,7 @@ fun LyricsSettingsScreen(scrollBehavior: TopAppBarScrollBehavior) {
     val (showPhonetic, onShowPhonetic) = rememberPreference(ShowLyricPhoneticKey, true)
     val (showTranslation, onShowTranslation) = rememberPreference(ShowLyricTransitionKey, true)
     val (seekOnLyricTap, onSeekOnLyricTap) = rememberPreference(SeekOnLyricTapKey, true)
+    val (autoHideControls, onAutoHideControls) = rememberPreference(LyricsControlsAutoHideKey, false)
     val (translationSize, onTranslationSize) = rememberEnumPreference(
         AccompanimentLyricTextSizeKey, LyricTextSize.Size20,
     )
@@ -169,6 +171,13 @@ fun LyricsSettingsScreen(scrollBehavior: TopAppBarScrollBehavior) {
                     icon = { Icon(Icons.Rounded.Lyrics, null) },
                     checked = seekOnLyricTap,
                     onCheckedChange = onSeekOnLyricTap,
+                )
+                SwitchPreference(
+                    title = { Text("歌词页自动收起控制栏") },
+                    description = "开启后 3 秒无操作自动收起；关闭则控制栏常驻，只有上下滑动歌词才切换完整歌词",
+                    icon = { Icon(Icons.Rounded.Timer, null) },
+                    checked = autoHideControls,
+                    onCheckedChange = onAutoHideControls,
                 )
             }
             PreferenceSection("翻译歌词") {

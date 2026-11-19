@@ -42,3 +42,11 @@
 - 小型 UI 修改先运行 `./gradlew :app:compileDebugKotlin`；数据、协议或播放行为变化再运行相关的定向测试。
 - 按当前协作约定，不主动安装或更新 APK，也不进行视觉测试；需要时由用户另行提出。
 - 汇报实际修改、验证结果和仍未确认的行为。编译通过不等于已在设备上验证视觉效果。
+
+## 本 fork 的定制（v2.2.0 起）
+
+- **播客**：`ui/screen/podcast/`（列表、详情、`PodcastViewModel`）；网络层 `WeApiService.getSubscribedRadios/getRadioPrograms`；模型 `data/model/podcast/PodcastModels.kt`；映射 `data/model/domain/PodcastMapper.kt`。播客节目的可播 id 是 `mainSong.id`，`program.id` 只能用于节目页和分享链接。
+- **播客播放保护**：`playback/source/PodcastTrackRegistry.kt` 记录播客歌曲 id；`MediaUriProvider` 对命中项固定 `standard` 音质并跳过 LX／解灰兜底（否则会白等 15 秒）。普通歌曲在目标音质取不到地址时，会再降级试一次 `standard`。
+- **应用内更新**：`data/repository/UpdateRepository.kt` + `ui/screen/update/`，入口在 设置 → 检查更新；安装包下载到 `filesDir/updates`，经 `FileProvider`（authority `${applicationId}.fileprovider`）交给系统安装器；需要 `REQUEST_INSTALL_PACKAGES` 权限。Release 资源名由 `tools/ci/prepare-apks.py` 生成，格式 `Mei_<tag>_<abi>.apk`，更新逻辑按 ABI 匹配。
+- **歌词页控制栏**：`PreferenceKeys.LyricsControlsAutoHideKey`（默认 false）控制是否 3 秒自动收起；点击歌词区域不再切换控制栏，只有上下滑动歌词才切换显隐。
+- **发布**：`versionName` 与 tag 保持一致（当前 2.2.0 / versionCode 4）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。

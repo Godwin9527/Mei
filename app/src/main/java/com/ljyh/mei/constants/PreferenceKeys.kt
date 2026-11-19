@@ -77,6 +77,9 @@ val ShowLyricPhoneticKey = booleanPreferencesKey("showLyricPhonetic")
 val ShowLyricTransitionKey = booleanPreferencesKey("showLyricTransition")
 val SeekOnLyricTapKey = booleanPreferencesKey("seekOnLyricTap")
 
+/** 歌词页控制栏是否在 3 秒后自动收起。关闭后控制栏常驻，只有上下滑动歌词才切换。 */
+val LyricsControlsAutoHideKey = booleanPreferencesKey("lyricsControlsAutoHide")
+
 val AccompanimentLyricTextSizeKey = stringPreferencesKey("accompanimentLyricTextSize")
 val AccompanimentLyricTextBoldKey = booleanPreferencesKey("accompanimentLyricTextBold")
 

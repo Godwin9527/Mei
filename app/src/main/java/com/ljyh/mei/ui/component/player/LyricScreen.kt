@@ -62,6 +62,7 @@ import com.ljyh.mei.R
 import com.ljyh.mei.constants.AccompanimentLyricTextBoldKey
 import com.ljyh.mei.constants.AccompanimentLyricTextSizeKey
 import com.ljyh.mei.constants.LyricTextSize
+import com.ljyh.mei.constants.LyricsControlsAutoHideKey
 import com.ljyh.mei.constants.NormalLyricTextBoldKey
 import com.ljyh.mei.constants.NormalLyricTextSizeKey
 import com.ljyh.mei.constants.PhoneticLyricTextBoldKey
@@ -145,6 +146,8 @@ fun LyricScreen(
     val (showPhonetic, _) = rememberPreference(ShowLyricPhoneticKey, true)
     val (showTranslation, _) = rememberPreference(ShowLyricTransitionKey, true)
     val (seekOnLyricTap, _) = rememberPreference(SeekOnLyricTapKey, true)
+    // 默认常驻：不再 3 秒自动收起，只有上下滑动歌词才在「完整歌词 / 半屏歌词」之间切换。
+    val (autoHideControls, _) = rememberPreference(LyricsControlsAutoHideKey, false)
 
     val (accompanimentLyricTextSize, _) = rememberEnumPreference(
         AccompanimentLyricTextSizeKey,
@@ -156,8 +159,8 @@ fun LyricScreen(
     val (phoneticLyricTextBold, _) = rememberPreference(PhoneticLyricTextBoldKey, true)
 
 
-    LaunchedEffect(controlsVisible) {
-        if (controlsVisible) {
+    LaunchedEffect(controlsVisible, autoHideControls) {
+        if (autoHideControls && controlsVisible) {
             delay(3000.milliseconds)
             onToggleControls(false)
         }
@@ -237,10 +240,6 @@ fun LyricScreen(
         modifier = modifier
             .fillMaxSize()
             .nestedScroll(nestedScrollConnection)
-            .clickable(
-                indication = null,
-                interactionSource = remember { MutableInteractionSource() }
-            ) { onToggleControls(true) }
     ) {
         Box(
             modifier = Modifier
@@ -261,7 +260,6 @@ fun LyricScreen(
                                 playbackPosition.intValue = line.start
                                 playerConnection.player.seekTo(line.start.toLong())
                             }
-                            onToggleControls(true)
                         },
                         onLinePressed = { line ->
                             val result = when (line) {

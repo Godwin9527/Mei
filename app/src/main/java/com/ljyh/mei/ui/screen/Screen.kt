@@ -13,6 +13,8 @@ sealed class Screen(val route:String) {
     data object Library:Screen("library")
     data object PersonalCenter:Screen("library/profile")
     data object LibraryCollection:Screen("library/collection")
+    data object Podcasts: Screen("library/podcasts")
+    data object PodcastDetail: Screen("library/podcast")
     data object FindMusic: Screen("find_music")
     data object DiscoverPlaylists: Screen("discover/playlists")
     data object DiscoverAlbums: Screen("discover/albums")
@@ -48,6 +50,7 @@ sealed class Screen(val route:String) {
     data object Comment: Screen("comment")
     data object Test:Screen("test")
     data object About: Screen("about")
+    data object Update: Screen("setting/update")
     data object Log: Screen("log")
 
     inline fun navigate(

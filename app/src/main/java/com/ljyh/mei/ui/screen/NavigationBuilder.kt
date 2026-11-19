@@ -14,10 +14,13 @@ import androidx.navigation.navArgument
 import androidx.compose.ui.platform.LocalContext
 import java.net.URLDecoder
 import com.ljyh.mei.ui.screen.about.AboutScreen
+import com.ljyh.mei.ui.screen.update.UpdateScreen
 import com.ljyh.mei.ui.screen.history.HistoryScreen
 import com.ljyh.mei.ui.screen.local.LocalMusicScreen
 import com.ljyh.mei.ui.screen.local.LocalSongListScreen
 import com.ljyh.mei.ui.screen.main.library.LibraryCollection
+import com.ljyh.mei.ui.screen.podcast.PodcastDetailScreen
+import com.ljyh.mei.ui.screen.podcast.PodcastsScreen
 import com.ljyh.mei.ui.screen.daily.EveryDay
 import com.ljyh.mei.ui.screen.setting.GlassSettingsScreen
 import com.ljyh.mei.ui.screen.setting.AppearanceSettingsScreen
@@ -81,6 +84,19 @@ internal fun NavGraphBuilder.navigationBuilder(
             it.name == entry.arguments?.getString("collection")
         } ?: LibraryCollection.Created
         pages.Collection(collection = collection, viewModel = hiltViewModel(parentEntry))
+    }
+
+    pageDestination(
+        Screen.Podcasts.route,
+        drawsBehindSideBar = true,
+    ) { PodcastsScreen() }
+
+    pageDestination(
+        route = "${Screen.PodcastDetail.route}/{radioId}",
+        drawsBehindSideBar = true,
+        arguments = listOf(navArgument("radioId") { type = NavType.LongType }),
+    ) { entry ->
+        PodcastDetailScreen(radioId = entry.arguments?.getLong("radioId") ?: 0L)
     }
 
     pageDestination(
@@ -221,6 +237,9 @@ internal fun NavGraphBuilder.navigationBuilder(
     }
     pageDestination(Screen.About.route) {
         AboutScreen()
+    }
+    pageDestination(Screen.Update.route) {
+        UpdateScreen()
     }
     pageDestination(Screen.Log.route) {
         LogScreen()

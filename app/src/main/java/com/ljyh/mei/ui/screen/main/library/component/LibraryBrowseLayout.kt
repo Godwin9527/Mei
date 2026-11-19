@@ -279,6 +279,9 @@ fun LibraryBrowseLayout(
                                 }
                             }
                         }
+                        item(key = "podcasts_entry") {
+                            LibraryPodcastEntry(Modifier.padding(rowPadding))
+                        }
                         if (state is LibraryUiState.Content && state.warning != null) item(key = "warning") {
                             Row(
                                 Modifier

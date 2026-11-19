@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material.icons.rounded.Storage
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -115,6 +116,10 @@ internal fun SettingsCategories(selectedRoute: String? = null, compact: Boolean 
                 SettingsDivider()
                 SettingRow(Screen.BetaSettings.route, "Beta 功能", "试用中的效果与参数", Icons.Rounded.Science, MeiCategory.Experimental) {
                     onSelect(Screen.BetaSettings)
+                }
+                SettingsDivider()
+                SettingRow(Screen.Update.route, "检查更新", "从 GitHub 下载并安装新版本", Icons.Rounded.SystemUpdate, MeiCategory.About) {
+                    onSelect(Screen.Update)
                 }
                 SettingsDivider()
                 SettingRow(Screen.About.route, "关于 Mei", null, Icons.Rounded.Info, MeiCategory.About) {
