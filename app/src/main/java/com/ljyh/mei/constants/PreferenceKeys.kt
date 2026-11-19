@@ -97,7 +97,9 @@ const val DefaultPodcastTextSize = 15
 val PodcastSortKey = stringPreferencesKey("podcast.sort")
 
 /** 音乐库区块顺序，按逗号分隔的区块 id 保存。 */
-val LibrarySectionOrderKey = stringPreferencesKey("library.sectionOrder")val KeepPlayerScreenOnKey = booleanPreferencesKey("keepPlayerScreenOn")
+val LibrarySectionOrderKey = stringPreferencesKey("library.sectionOrder")
+
+val KeepPlayerScreenOnKey = booleanPreferencesKey("keepPlayerScreenOn")
 val NoAudioSourceKey = booleanPreferencesKey("noAudioSource")
 val SmartTransitionEnabledKey = booleanPreferencesKey("smartTransition.enabled")
 val SmartTransitionModeKey = stringPreferencesKey("smartTransition.mode")

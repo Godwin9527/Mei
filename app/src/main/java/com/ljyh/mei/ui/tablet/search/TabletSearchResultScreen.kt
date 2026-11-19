@@ -125,6 +125,18 @@ private fun TabletSearchResults(state: SearchResultContentState) = with(state) {
                                 TabletSearchTile(playlist.title, "${playlist.trackCount} 首 · ${playlist.creatorName}", playlist.coverUrl,
                                     words, onClick = { actions.onPlaylist(playlist) })
                             }
+                            SearchType.Podcast -> items(data.radios, key = { "radio-${it.id}" }) { radio ->
+                                TabletSearchTile(
+                                    radio.name,
+                                    listOfNotNull(
+                                        radio.djName.takeIf { it.isNotBlank() },
+                                        radio.programCount.takeIf { it > 0 }?.let { "$it 个节目" },
+                                    ).joinToString(" · "),
+                                    radio.coverUrl,
+                                    words,
+                                    onClick = { actions.onPodcast(radio.id) },
+                                )
+                            }
                             SearchType.History -> Unit
                         }
                         if (page.appending || page.appendError || data.hasMore) item("pagination", span = { GridItemSpan(maxLineSpan) }) {

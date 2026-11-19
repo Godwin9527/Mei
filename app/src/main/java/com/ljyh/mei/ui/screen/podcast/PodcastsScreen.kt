@@ -54,7 +54,8 @@ fun PodcastsScreen(viewModel: PodcastViewModel = hiltViewModel()) {
     val nav = LocalNavController.current
     val radios by viewModel.radios.collectAsStateWithLifecycle()
     val (textSize, _) = rememberPreference(PodcastTextSizeKey, DefaultPodcastTextSize)
-    var query by rememberSaveable { mutableStateOf("") }    LaunchedEffect(Unit) { viewModel.loadRadios() }
+    var query by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(Unit) { viewModel.loadRadios() }
 
     val all = (radios as? Resource.Success)?.data.orEmpty()
     val filtered = remember(all, query) {
