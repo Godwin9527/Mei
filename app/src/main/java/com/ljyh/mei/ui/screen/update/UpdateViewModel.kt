@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ljyh.mei.data.network.Resource
 import com.ljyh.mei.data.repository.AppRelease
+import com.ljyh.mei.data.repository.DownloadProgress
 import com.ljyh.mei.data.repository.UpdateRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +22,8 @@ data class UpdateUiState(
     val upToDate: Boolean = false,
     val downloading: Boolean = false,
     val progress: Int = 0,
+    /** 下载明细：速度、当前源、已下载字节。慢网下界面要展示这些。 */
+    val download: DownloadProgress? = null,
     val downloadedFile: File? = null,
     val error: String? = null,
 )
@@ -33,11 +36,15 @@ class UpdateViewModel @Inject constructor(
     private val _state = MutableStateFlow(UpdateUiState(currentVersion = repository.currentVersion))
     val state: StateFlow<UpdateUiState> = _state.asStateFlow()
 
-    fun check() {
+    /**
+     * 查询最新版本。[force] 用于「重新检查」，但仓库层仍限制 30 秒内不重复请求，
+     * 防止连点把 GitHub 的每小时 60 次额度耗光。
+     */
+    fun check(force: Boolean = false) {
         if (_state.value.checking || _state.value.downloading) return
         _state.value = _state.value.copy(checking = true, error = null, upToDate = false)
         viewModelScope.launch {
-            when (val result = repository.latestRelease()) {
+            when (val result = repository.latestRelease(force)) {
                 is Resource.Success -> {
                     val release = result.data
                     val newer = UpdateRepository.isNewer(release.versionName, repository.currentVersion)
@@ -60,10 +67,13 @@ class UpdateViewModel @Inject constructor(
     fun download() {
         val release = _state.value.release ?: return
         if (_state.value.downloading) return
-        _state.value = _state.value.copy(downloading = true, progress = 0, error = null)
+        _state.value = _state.value.copy(
+            downloading = true, progress = 0, download = null, error = null,
+        )
         viewModelScope.launch {
-            when (val result = repository.download(release) { percent ->
-                _state.value = _state.value.copy(progress = percent)
+            when (val result = repository.download(release) { detail ->
+                // 直接套用回调里的百分比，避免与 progress 两个来源不一致。
+                _state.value = _state.value.copy(progress = detail.percent, download = detail)
             }) {
                 is Resource.Success -> _state.value = _state.value.copy(
                     downloading = false, progress = 100, downloadedFile = result.data,

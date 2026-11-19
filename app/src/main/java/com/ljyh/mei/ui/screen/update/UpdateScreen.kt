@@ -30,6 +30,9 @@ import com.ljyh.mei.ui.component.glass.MeiLargeTitle
 import com.ljyh.mei.ui.component.glass.MeiPinnedPage
 import com.ljyh.mei.ui.component.layout.meiPageGutter
 import com.ljyh.mei.ui.local.LocalNavController
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** 设置 → 检查更新。查 GitHub Releases，一键下载并交给系统安装器。 */
 @Composable
@@ -87,10 +90,15 @@ fun UpdateScreen(viewModel: UpdateViewModel = hiltViewModel()) {
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.primary,
                             )
-                            val size = state.release?.sizeText.orEmpty()
-                            if (size.isNotBlank()) {
+                            val meta = buildList {
+                                state.release?.sizeText?.takeIf { it.isNotBlank() }?.let { add(it) }
+                                state.release?.cachedAt?.takeIf { it > 0 }?.let {
+                                    add("${clockText(it)} 的查询结果")
+                                }
+                            }.joinToString(" · ")
+                            if (meta.isNotBlank()) {
                                 Text(
-                                    size,
+                                    meta,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -125,11 +133,49 @@ fun UpdateScreen(viewModel: UpdateViewModel = hiltViewModel()) {
             }
 
             if (state.downloading) {
+                val detail = state.download
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("正在下载 ${state.progress}%", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        buildString {
+                            append("正在下载 ${state.progress}%")
+                            if (detail != null && detail.bytesPerSecond > 0) {
+                                append(" · ")
+                                append(formatSpeed(detail.bytesPerSecond))
+                            }
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                     androidx.compose.material3.LinearProgressIndicator(
                         progress = { state.progress / 100f },
                         modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (detail != null && detail.totalBytes > 0) {
+                        Text(
+                            buildString {
+                                append(formatBytes(detail.downloadedBytes))
+                                append(" / ")
+                                append(formatBytes(detail.totalBytes))
+                                if (detail.resumed) append(" · 接着上次继续")
+                                if (detail.source.isNotBlank()) {
+                                    append(" · 来源 ")
+                                    append(detail.source)
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            // 失败时如果已经下了一部分，明确告诉用户重试是从断点续传，不会白下。
+            if (!state.downloading && state.error != null) {
+                val detail = state.download
+                if (detail != null && detail.downloadedBytes > 0 && detail.totalBytes > 0) {
+                    Text(
+                        "已保留 ${formatBytes(detail.downloadedBytes)}（${detail.percent}%），重试会从这里继续",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -160,7 +206,7 @@ fun UpdateScreen(viewModel: UpdateViewModel = hiltViewModel()) {
             }
 
             TextButton(
-                onClick = { viewModel.check() },
+                onClick = { viewModel.check(force = true) },
                 enabled = !state.checking && !state.downloading,
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -176,3 +222,22 @@ fun UpdateScreen(viewModel: UpdateViewModel = hiltViewModel()) {
         }
     }
 }
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024 * 1024 ->
+        String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
+
+    bytes >= 1024L * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
+    bytes >= 1024L -> String.format(Locale.US, "%d KB", bytes / 1024)
+    else -> "$bytes B"
+}
+
+private fun formatSpeed(bytesPerSecond: Long): String =
+    if (bytesPerSecond >= 1024L * 1024) {
+        String.format(Locale.US, "%.1f MB/s", bytesPerSecond / 1024.0 / 1024.0)
+    } else {
+        String.format(Locale.US, "%d KB/s", bytesPerSecond / 1024)
+    }
+
+private fun clockText(epochMs: Long): String =
+    SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(epochMs))

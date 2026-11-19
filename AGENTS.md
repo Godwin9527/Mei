@@ -49,7 +49,7 @@
 - **播客播放保护**：`playback/source/PodcastTrackRegistry.kt` 记录播客歌曲 id；`MediaUriProvider` 对命中项固定 `standard` 音质并跳过 LX／解灰兜底（否则会白等 15 秒）。普通歌曲在目标音质取不到地址时，会再降级试一次 `standard`。
 - **应用内更新**：`data/repository/UpdateRepository.kt` + `ui/screen/update/`，入口在 设置 → 检查更新；安装包下载到 `filesDir/updates`，经 `FileProvider`（authority `${applicationId}.fileprovider`）交给系统安装器；需要 `REQUEST_INSTALL_PACKAGES` 权限。Release 资源名由 `tools/ci/prepare-apks.py` 生成，格式 `Mei_<tag>_<abi>.apk`，更新逻辑按 ABI 匹配。
 - **歌词页控制栏**：`PreferenceKeys.LyricsControlsAutoHideKey`（默认 false）控制是否 3 秒自动收起；点击歌词区域不再切换控制栏，只有上下滑动歌词才切换显隐。
-- **发布**：`versionName` 与 tag 保持一致（当前 2.3.0 / versionCode 5）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
+- **发布**：`versionName` 与 tag 保持一致（当前 2.3.1 / versionCode 6）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
 
 ## v2.3.0 起：播客体验与播放记忆
 
@@ -62,3 +62,14 @@
 - **时间跳转**：`PlayerControlsSection.PodcastSeekRow` 仅在播客曲目显示 -30s/-5s/+5s/+30s，原有上一首/播放/下一首不变。
 - **音乐库排序**：`LibrarySection` + `LibrarySectionOrderKey`，手机端五个区块由 `mobileLibraryContent` 按顺序分派到 `mobileXxxSection`；顶栏 `SwapVert` 打开 `LibraryLayoutDialog`（上下箭头）。平板布局暂未接入该顺序。
 - **搜索**：`SearchType.Podcast`（type=1009），`SearchResponseParser` 解析 `result.djRadios`，结果行点击进入 `Screen.PodcastDetail`。接口可用性未在本机验证。
+
+## v2.3.1 起：更新下载改造
+
+国内直连 GitHub Release 资产（`objects.githubusercontent.com` / Fastly）通常只有 15~30 KB/s，22MB 要十几分钟，官方 API 还有未登录 60 次/小时的额度限制。`UpdateRepository` 相应拆成几层：
+
+- **多源下载**：`MIRRORS` 内置 4 个公共加速反代（`ghfast.top`、`ghproxy.net`、`gh-proxy.com`、`github.moeyy.xyz`），`rankSources` 并发 `Range: bytes=0-49151` 探测实际吞吐后降序排列，官方直连永远最后兜底。这些是社区服务，失效是常态，只改 `MIRRORS` 列表即可增删。
+- **断点续传**：下载写 `mei-<tag>.apk.part`，带 `Range: bytes=<已有长度>-`；只有长度校验通过才 `renameTo` 正式文件名。原实现开头就删旧包，慢网下每次重试都从 0 开始，这是「越下越久」的根因。
+- **慢源切换**：每 `SPEED_WINDOW_MS`(8s) 统计一次，低于 `MIN_SPEED_BPS`(12 KB/s) 且还有备用源就换下一个，已下字节保留。
+- **查询限流**：`latestRelease` 结果写 `filesDir/update-cache.json`，10 分钟内走缓存；「重新检查」传 `force = true` 但仍有 30 秒最小间隔。403/429 读 `X-RateLimit-Reset`，提示变成「额度已用完，HH:mm 后可重试」；查询失败且有缓存时退回缓存。
+- **UI**：`DownloadProgress`（percent / 速度 / 当前源 / 已下字节 / 是否续传）经 `UpdateUiState.download` 到界面，显示「1.2 MB / 22.6 MB · 接着上次继续 · 来源 ghfast.top」。
+- 首次从 v2.3.0 升级时用的还是旧下载逻辑，加速只在装到 2.3.1 之后生效。
