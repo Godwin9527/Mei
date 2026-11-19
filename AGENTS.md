@@ -73,3 +73,11 @@
 - **查询限流**：`latestRelease` 结果写 `filesDir/update-cache.json`，10 分钟内走缓存；「重新检查」传 `force = true` 但仍有 30 秒最小间隔。403/429 读 `X-RateLimit-Reset`，提示变成「额度已用完，HH:mm 后可重试」；查询失败且有缓存时退回缓存。
 - **UI**：`DownloadProgress`（percent / 速度 / 当前源 / 已下字节 / 是否续传）经 `UpdateUiState.download` 到界面，显示「1.2 MB / 22.6 MB · 接着上次继续 · 来源 ghfast.top」。
 - 首次从 v2.3.0 升级时用的还是旧下载逻辑，加速只在装到 2.3.1 之后生效。
+
+## v2.3.2 起：播客播放界面与队列修复
+
+- **封面遮挡标题**：`AppleMusicPlayer` 里暂停时封面 0.85、播放时放大到 1.0（约 +17.6%），`graphicsLayer` 以中心缩放，视觉下沿会多出 `(expandedVisualSize-expandedSize)/2 ≈ 20~30dp`，正好压住下方 `Title` 第一行。`normalPathBounds` 改为「底部固定、向上生长」：`top = expandedTop + expandedSize - expandedVisualSize`，并用 `topSafeArea` 兜底防止顶进状态栏。小屏走 `isCompactHeight`，标题本来就不显示。
+- **队列标题截断**：`QueueTrackRow` 对 `metadata.isPodcast` 用 `maxLines = 2`，其余保持 1 行。评书类标题（「王玥波雍正剑侠图第7部 132」）末尾集数不再被省略号吃掉。
+- **队列里播客项空白**（只有一个时长）：根因是 `PlaybackQueueSnapshot` 只存 `currentSong`，其余靠 `createPlaceholder`，再由 `PlaybackQueueManager.loadSongDetails` 走 `/song/detail` 补全；播客的 `mainSong.id` 在那里只返回时长，标题和封面是空的，于是替换成了空行。现在快照新增 `podcasts: List<PodcastQueueSong>?`（仅播客队列，约 25KB/161 集），恢复时优先用它 `toMediaMetadata().toMediaItem()` 重建，同时会 `PodcastTrackRegistry.mark`，不会白等 LX 兜底。
+- **防御**：`loadMetadataAtIndices` 过滤掉 `title` 为空的返回，不再用残缺数据覆盖占位符；`savePlaybackQueue` 一次取 `player.mediaItems`，并对 `currentIndex` / `currentSong` 做一致性校验，避免 `ids` 与 `entries` 长度不一致导致 decode 校验失败、整份快照被丢弃。
+- 旧快照（无 `podcasts` 字段）升级后第一次仍是空行，播放一次播客让新快照写入（10 秒内）即可。
