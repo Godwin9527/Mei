@@ -234,6 +234,11 @@ class MusicService : MediaLibraryService(),
     private var sampledMediaId: String? = null
     private var sampledPositionMs: Long = 0L
     private var sampledDurationMs: Long = 0L
+    private var sampledIsPodcast = false
+
+    /** 上次真正写进库的位置，用来跳过暂停时的重复写入。 */
+    private var persistedMediaId: String? = null
+    private var persistedPositionMs: Long = -1L
 
     @Inject
     lateinit var songRepository: SongRepository
@@ -532,8 +537,11 @@ class MusicService : MediaLibraryService(),
     }
 
     /**
-     * 每 10 秒把当前曲目进度落库；另外每秒更新一次内存采样，
+     * 每 5 秒把当前曲目进度落库；另外每秒更新一次内存采样，
      * 切歌时用采样值补写上一曲，保证最后几秒不会丢。
+     *
+     * 5 秒而不是 10 秒：音乐库卡片和播放队列直接读这张表，
+     * 间隔太长会看到进度条明显落后于播放位置。
      */
     private fun startProgressSampling() {
         if (progressSampleJob != null) return
@@ -542,7 +550,7 @@ class MusicService : MediaLibraryService(),
             while (isActive) {
                 delay(1000)
                 ticks++
-                sampleProgress(persist = ticks % 10 == 0)
+                sampleProgress(persist = ticks % 5 == 0)
             }
         }
     }
@@ -551,24 +559,38 @@ class MusicService : MediaLibraryService(),
         val item = player.currentMediaItem ?: return
         val id = item.mediaId
         val position = player.currentPosition.coerceAtLeast(0L)
-        val duration = player.duration.takeIf { it > 0 }
-            ?: item.mediaMetadata.durationMs
-            ?: 0L
+        // 优先用元数据里的时长：ExoPlayer 对 VBR 文件给的 duration 常常偏小，
+        // 拿它判断「接近结尾」会把没听完的集数误判成听完。
+        val metaDuration = (item.localConfiguration?.tag as? MediaMetadata)?.duration ?: 0L
+        val duration = listOf(item.mediaMetadata.durationMs, metaDuration, player.duration)
+            .firstOrNull { it > 0L } ?: 0L
+        val isPodcast = item.queueSource?.type == QueueSource.Type.PODCAST ||
+            PodcastTrackRegistry.contains(id)
         val previousId = sampledMediaId
         if (previousId != null && previousId != id) {
-            persistProgress(previousId, sampledPositionMs, sampledDurationMs)
+            persistProgress(previousId, sampledPositionMs, sampledDurationMs, sampledIsPodcast)
         }
         sampledMediaId = id
         sampledPositionMs = position
         sampledDurationMs = duration
-        if (persist && position > 0) persistProgress(id, position, duration)
+        sampledIsPodcast = isPodcast
+        if (persist && position > 0) persistProgress(id, position, duration, isPodcast)
     }
 
-    private fun persistProgress(id: String, positionMs: Long, durationMs: Long) {
+    private fun persistProgress(
+        id: String,
+        positionMs: Long,
+        durationMs: Long,
+        isPodcast: Boolean = false,
+    ) {
         if (id.isBlank() || positionMs <= 0) return
-        if (PodcastTrackRegistry.contains(id)) {
+        if (isPodcast) {
             updateRecentPodcastProgress(id, positionMs, durationMs)
         }
+        // 暂停时位置不变，不必反复写同一条记录。
+        if (id == persistedMediaId && positionMs == persistedPositionMs) return
+        persistedMediaId = id
+        persistedPositionMs = positionMs
         scope.launch {
             try {
                 progressRepository.record(id, positionMs, durationMs)
@@ -594,10 +616,11 @@ class MusicService : MediaLibraryService(),
             if (player.currentMediaItem?.mediaId != mediaId) return@launch
             // 刚切到这一集时播放器还没解析出时长，退回元数据里的时长，避免把「接近结尾」的
             // 位置也恢复过去——播客一旦落到末尾，表现就是进度条满、直接没声。
+            // 元数据优先：ExoPlayer 对 VBR 文件的时长估算经常偏小。
             val metaDuration = (player.currentMediaItem?.localConfiguration?.tag as? MediaMetadata)
                 ?.duration
                 ?: 0L
-            val duration = player.duration.takeIf { it > 0 } ?: metaDuration
+            val duration = listOf(metaDuration, player.duration).firstOrNull { it > 0L } ?: 0L
             val tailGuardMs = if (PodcastTrackRegistry.contains(mediaId)) 90_000L else 3_000L
             if (duration > 0 && position >= duration - tailGuardMs) return@launch
             if (kotlin.math.abs(player.currentPosition - position) < 3000) return@launch

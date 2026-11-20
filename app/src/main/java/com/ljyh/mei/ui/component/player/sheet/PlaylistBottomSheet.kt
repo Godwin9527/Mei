@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -32,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -61,9 +63,13 @@ import coil3.compose.AsyncImage
 import com.ljyh.mei.data.model.domain.MediaMetadata
 import com.ljyh.mei.data.model.domain.PLACEHOLDER_URI
 import com.ljyh.mei.data.model.domain.metadata
+import com.ljyh.mei.data.model.room.PlaybackProgress
 import com.ljyh.mei.extensions.mediaItems
+import com.ljyh.mei.playback.queue.QueueSource
 import com.ljyh.mei.playback.queue.queueEntryId
 import com.ljyh.mei.playback.queue.queueSource
+import com.ljyh.mei.playback.source.PodcastTrackRegistry
+import com.ljyh.mei.ui.component.ListenProgressBar
 import com.ljyh.mei.ui.component.sheet.MeiAdaptiveSheet
 import com.ljyh.mei.ui.component.sheet.meiSheetContentHeight
 import com.ljyh.mei.ui.component.sheet.rememberMeiAdaptiveSheetState
@@ -93,6 +99,14 @@ fun PlaylistContent(
     val rows = queueRows.rows
     val currentIndex by playerConnection.currentMediaItemIndex.collectAsState()
     var initiallyPositioned by rememberSaveable(playerConnection) { mutableStateOf(false) }
+
+    // 播客行要显示「已听 / 已听完」：进度直接读本地表，不发请求，滚动也不会有加载态。
+    val progressBySong by produceState<Map<String, PlaybackProgress>>(
+        initialValue = emptyMap(),
+        playerConnection,
+    ) {
+        playerConnection.service.progressRepository.observeBySong().collectLatest { value = it }
+    }
 
     DisposableEffect(playerConnection) {
         val listener = object : Player.Listener {
@@ -191,6 +205,8 @@ fun PlaylistContent(
                             item = row.item,
                             isCurrentPlaying = queueRows.indexOf(row.key) == currentIndex,
                             isDragging = isDragging,
+                            progress = progressBySong[row.item.mediaId],
+                            playbackPositionMs = { player.currentPosition.coerceAtLeast(0L) },
                             dragHandle = Modifier
                                 .longPressDraggableHandle(
                                     onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) },
@@ -260,6 +276,8 @@ private fun QueueTrackRow(
     item: MediaItem,
     isCurrentPlaying: Boolean,
     isDragging: Boolean,
+    progress: PlaybackProgress?,
+    playbackPositionMs: () -> Long,
     dragHandle: Modifier,
     onItemClick: () -> Unit,
     onRemoveClick: () -> Unit,
@@ -272,14 +290,57 @@ private fun QueueTrackRow(
     }
     val titleColor = if (isCurrentPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
     val isPending = item.localConfiguration?.uri.toString() == PLACEHOLDER_URI
-    val subtitle = metadata?.let {
-        val artists = it.artists.joinToString(", ") { artist -> artist.name }
-        if (artists.isBlank()) formatDuration(it.duration) else "$artists · ${formatDuration(it.duration)}"
-    } ?: if (isPending) {
-        "正在获取歌曲信息"
+    val isPodcast = item.queueSource?.type == QueueSource.Type.PODCAST ||
+        PodcastTrackRegistry.contains(item.mediaId)
+
+    // 正在播放的这一集用实时位置，其余行用上一次落库的值：
+    // 否则队列一打开，当前集就停在上一次写库的位置，看着像卡住了。
+    val livePosition by produceState(0L, isCurrentPlaying) {
+        if (!isCurrentPlaying) return@produceState
+        while (true) {
+            value = playbackPositionMs()
+            delay(1_000L)
+        }
+    }
+    val totalMs = progress?.durationMs?.takeIf { it > 0L } ?: metadata?.duration ?: 0L
+    val listenedMs = when {
+        isCurrentPlaying -> livePosition
+        progress != null -> progress.positionMs
+        else -> 0L
+    }
+    val completed = progress?.completed == true && !isCurrentPlaying
+
+    val subtitle = if (isPodcast) {
+        when {
+            completed -> "已听完" + totalMs.takeIf { it > 0L }?.let { " · ${formatDuration(it)}" }.orEmpty()
+            progress != null || isCurrentPlaying -> buildString {
+                append("已听 ${formatDuration(listenedMs)}")
+                if (totalMs > 0L) append(" / ${formatDuration(totalMs)}")
+            }
+            totalMs > 0L -> "未播放 · ${formatDuration(totalMs)}"
+            else -> "未播放"
+        }
     } else {
-        // 没拿到元数据又不是占位符：接口确实查不到，不再假装还在加载。
-        "未知节目"
+        metadata?.let {
+            val artists = it.artists.joinToString(", ") { artist -> artist.name }
+            if (artists.isBlank()) formatDuration(it.duration) else "$artists · ${formatDuration(it.duration)}"
+        } ?: if (isPending) {
+            "正在获取歌曲信息"
+        } else {
+            // 没拿到元数据又不是占位符：接口确实查不到，不再假装还在加载。
+            "未知节目"
+        }
+    }
+    val showBar = isPodcast && (progress != null || isCurrentPlaying)
+    val fraction = when {
+        completed -> 1f
+        totalMs <= 0L -> 0f
+        else -> (listenedMs.toFloat() / totalMs.toFloat()).coerceIn(0f, 1f)
+    }
+    val barColor = when {
+        completed -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+        isCurrentPlaying -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
     }
 
     Row(
@@ -325,10 +386,19 @@ private fun QueueTrackRow(
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (isPodcast && (completed || progress != null)) barColor
+                else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (showBar) {
+                Spacer(Modifier.height(4.dp))
+                ListenProgressBar(
+                    fraction = fraction,
+                    color = barColor,
+                    modifier = Modifier.padding(end = 6.dp),
+                )
+            }
         }
 
         Box(modifier = dragHandle.size(40.dp), contentAlignment = Alignment.Center) {

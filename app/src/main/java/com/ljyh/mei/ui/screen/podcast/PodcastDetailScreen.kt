@@ -65,9 +65,11 @@ import com.ljyh.mei.data.model.domain.toMediaItem
 import com.ljyh.mei.data.model.domain.toMediaMetadata
 import com.ljyh.mei.data.model.podcast.DjProgram
 import com.ljyh.mei.data.model.podcast.DjRadio
+import com.ljyh.mei.data.model.room.PlaybackProgress
 import com.ljyh.mei.playback.queue.ListQueue
 import com.ljyh.mei.playback.queue.QueueSource
 import com.ljyh.mei.ui.component.MeiStatePanel
+import com.ljyh.mei.ui.component.ListenProgressBar
 import com.ljyh.mei.ui.component.glass.MeiGlassBackButton
 import com.ljyh.mei.ui.component.glass.MeiTopAppBar
 import com.ljyh.mei.ui.component.layout.meiPageGutter
@@ -177,7 +179,12 @@ fun PodcastDetailScreen(
             ),
         ) {
             item(key = "podcast_header") {
-                PodcastHeader(radio = radio, total = state.total, fallbackTitle = title)
+                PodcastHeader(
+                    radio = radio,
+                    total = state.total,
+                    completedCount = state.completedCount,
+                    fallbackTitle = title,
+                )
             }
             item(key = "podcast_search") {
                 PodcastSearchField(
@@ -204,10 +211,15 @@ fun PodcastDetailScreen(
 
                 state.error != null && state.programs.isEmpty() -> item(key = "podcast_error") {
                     MeiStatePanel(
-                        title = "暂时无法加载节目",
+                        title = if (state.retryInSeconds > 0) state.error.orEmpty() else "暂时无法加载节目",
                         icon = Icons.Rounded.CloudOff,
-                        actionLabel = "重新加载",
-                        onAction = { viewModel.reload() },
+                        message = if (state.retryInSeconds > 0) {
+                            "连续请求会被网易云限流，${state.retryInSeconds} 秒后可再试一次"
+                        } else {
+                            null
+                        },
+                        actionLabel = if (state.retryInSeconds > 0) null else "重新加载",
+                        onAction = if (state.retryInSeconds > 0) null else ({ viewModel.reload() }),
                         modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                     )
                 }
@@ -228,7 +240,7 @@ fun PodcastDetailScreen(
                         program = program,
                         index = index + 1,
                         textSize = textSize,
-                        listenedMs = state.progressBySong[program.mainSong?.id?.toString()],
+                        progress = state.progressBySong[program.mainSong?.id?.toString().orEmpty()],
                         onClick = {
                             val songId = program.mainSong?.id?.takeIf { it > 0 } ?: return@PodcastProgramRow
                             playerConnection?.onTrackClicked(
@@ -249,18 +261,44 @@ fun PodcastDetailScreen(
             }
             if (state.loadingAll || state.error != null) item(key = "podcast_more") {
                 Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                    if (state.loadingAll) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(8.dp))
+                    when {
+                        state.loadingAll -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "正在加载 ${state.loaded}/${maxOf(state.total, state.loaded)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+
+                        // 命中频控时把剩余秒数写在提示里，冷却期间不提供按钮，
+                        // 免得越点越发、把限流拖得更久。
+                        state.retryInSeconds > 0 -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Rounded.CloudOff,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(6.dp))
                             Text(
-                                "正在加载 ${state.loaded}/${maxOf(state.total, state.loaded)}",
+                                "${state.error}（${state.retryInSeconds} 秒后可重试）",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                    } else {
-                        TextButton(onClick = { viewModel.loadMore() }) { Text("加载中断，点此重试") }
+
+                        else -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                state.error.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(onClick = { viewModel.loadMore() }) { Text("重新加载") }
+                        }
                     }
                 }
             }
@@ -292,7 +330,7 @@ fun PodcastDetailScreen(
 }
 
 @Composable
-private fun PodcastHeader(radio: DjRadio?, total: Int, fallbackTitle: String) {
+private fun PodcastHeader(radio: DjRadio?, total: Int, completedCount: Int, fallbackTitle: String) {
     Column(Modifier.fillMaxWidth().padding(horizontal = meiPageGutter())) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
@@ -330,7 +368,7 @@ private fun PodcastHeader(radio: DjRadio?, total: Int, fallbackTitle: String) {
                 }
                 if (count > 0) {
                     Text(
-                        "$count 个节目",
+                        if (completedCount > 0) "共 $count 集 · 已播 $completedCount 集" else "共 $count 集",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -365,7 +403,7 @@ private fun PodcastProgramRow(
     program: DjProgram,
     index: Int,
     textSize: Int,
-    listenedMs: Long?,
+    progress: PlaybackProgress?,
     onClick: () -> Unit,
 ) {
     val date = remember(program.createTime) {
@@ -373,11 +411,28 @@ private fun PodcastProgramRow(
             SimpleDateFormat("yyyy/M/d", Locale.getDefault()).format(Date(it))
         }
     }
+    val completed = progress?.completed == true
+    val totalMs = progress?.durationMs?.takeIf { it > 0L } ?: program.duration
     val meta = listOfNotNull(
         program.serialNum?.takeIf { it > 0 }?.let { "第 $it 期" },
         date,
-        program.duration.takeIf { it > 0 }?.let { TimeUtils.formatDuration(it) },
+        totalMs.takeIf { it > 0 }?.let { TimeUtils.formatDuration(it) },
     ).joinToString(" · ")
+    // 听完的只写「已听完」，没听完的给位置和总长，没听过的什么都不加。
+    val progressLabel = when {
+        completed -> "已听完"
+        progress == null -> null
+        else -> buildString {
+            append("已听 ${TimeUtils.formatDuration(progress.positionMs)}")
+            if (totalMs > 0) append(" / ${TimeUtils.formatDuration(totalMs)}")
+        }
+    }
+    val subSize = (textSize - 3).coerceAtLeast(10).sp
+    val progressColor = if (completed) {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
 
     Row(
         modifier = Modifier
@@ -405,33 +460,41 @@ private fun PodcastProgramRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (meta.isNotBlank() || listenedMs != null) {
+            if (meta.isNotBlank() || progressLabel != null) {
                 Spacer(Modifier.height(3.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         meta,
-                        fontSize = (textSize - 3).coerceAtLeast(10).sp,
+                        fontSize = subSize,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    if (listenedMs != null) {
+                    if (progressLabel != null) {
                         if (meta.isNotBlank()) {
                             Text(
                                 " · ",
-                                fontSize = (textSize - 3).coerceAtLeast(10).sp,
+                                fontSize = subSize,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                         Text(
-                            "已听 ${TimeUtils.formatDuration(listenedMs)}",
-                            fontSize = (textSize - 3).coerceAtLeast(10).sp,
-                            color = MaterialTheme.colorScheme.primary,
+                            progressLabel,
+                            fontSize = subSize,
+                            color = progressColor,
                             maxLines = 1,
                         )
                     }
                 }
+            }
+            if (progress != null) {
+                Spacer(Modifier.height(5.dp))
+                ListenProgressBar(
+                    fraction = progress.fraction,
+                    color = progressColor,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
             }
         }
     }

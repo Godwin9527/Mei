@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -35,6 +36,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.ljyh.mei.data.model.domain.RecentPodcastEpisode
+import com.ljyh.mei.data.model.room.PlaybackProgress
 import com.ljyh.mei.utils.TimeUtils.formatDuration
 
 /**
@@ -47,6 +49,8 @@ import com.ljyh.mei.utils.TimeUtils.formatDuration
 @Composable
 internal fun LibraryPodcastCard(
     recent: RecentPodcastEpisode?,
+    progress: PlaybackProgress?,
+    playing: Boolean,
     height: Dp,
     modifier: Modifier = Modifier,
     canPlay: Boolean,
@@ -56,6 +60,15 @@ internal fun LibraryPodcastCard(
 ) {
     val hasEpisode = recent != null
     val cover = recent?.coverUrl.orEmpty()
+    // 进度以本地进度表为准，偏好里那份只在表里还没有记录时兜底：
+    // 偏好写的是「最近一集」，一旦切换过集数就可能是旧值。
+    val completed = progress?.completed == true
+    val listenedMs = when {
+        completed -> 0L
+        progress != null -> progress.positionMs
+        else -> recent?.positionMs ?: 0L
+    }
+    val totalMs = progress?.durationMs?.takeIf { it > 0L } ?: recent?.durationMs ?: 0L
     Box(
         modifier
             .fillMaxWidth()
@@ -120,9 +133,16 @@ internal fun LibraryPodcastCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = buildString {
-                        append("已听 ${formatDuration(recent.positionMs)}")
-                        if (recent.durationMs > 0L) append(" / ${formatDuration(recent.durationMs)}")
+                    text = if (completed) {
+                        buildString {
+                            append("已听完")
+                            if (totalMs > 0L) append(" · ${formatDuration(totalMs)}")
+                        }
+                    } else {
+                        buildString {
+                            append("已听 ${formatDuration(listenedMs)}")
+                            if (totalMs > 0L) append(" / ${formatDuration(totalMs)}")
+                        }
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.75f),
@@ -139,7 +159,7 @@ internal fun LibraryPodcastCard(
         }
         FilledIconButton(
             onClick = if (hasEpisode) onPlay else onBrowse,
-            enabled = !hasEpisode || canPlay,
+            enabled = !hasEpisode || (canPlay && !playing),
             colors = IconButtonDefaults.filledIconButtonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -149,13 +169,25 @@ internal fun LibraryPodcastCard(
                 .padding(12.dp)
                 .size(48.dp)
                 .semantics {
-                    contentDescription = if (hasEpisode) "继续播放上次的播客" else "浏览我关注的播客"
+                    contentDescription = when {
+                        playing -> "正在准备播放队列"
+                        hasEpisode -> "继续播放上次的播客"
+                        else -> "浏览我关注的播客"
+                    }
                 },
         ) {
-            Icon(
-                imageVector = if (hasEpisode) Icons.Rounded.PlayArrow else Icons.Rounded.Mic,
-                contentDescription = null,
-            )
+            if (playing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                )
+            } else {
+                Icon(
+                    imageVector = if (hasEpisode) Icons.Rounded.PlayArrow else Icons.Rounded.Mic,
+                    contentDescription = null,
+                )
+            }
         }
     }
 }

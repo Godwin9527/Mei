@@ -49,7 +49,7 @@
 - **播客播放保护**：`playback/source/PodcastTrackRegistry.kt` 记录播客歌曲 id（**SharedPreferences 持久化**，`AppContext.onCreate` 调 `install`）；`MediaUriProvider` 对命中项固定 `standard` 音质并跳过 LX／解灰兜底（否则会白等 15 秒）。普通歌曲在目标音质取不到地址时，会再降级试一次 `standard`。
 - **应用内更新**：`data/repository/UpdateRepository.kt` + `ui/screen/update/`，入口在 设置 → 检查更新；安装包下载到 `filesDir/updates`，经 `FileProvider`（authority `${applicationId}.fileprovider`）交给系统安装器；需要 `REQUEST_INSTALL_PACKAGES` 权限。Release 资源名由 `tools/ci/prepare-apks.py` 生成，格式 `Mei_<tag>_<abi>.apk`，更新逻辑按 ABI 匹配。
 - **歌词页控制栏**：`PreferenceKeys.LyricsControlsAutoHideKey`（默认 false）控制是否 3 秒自动收起；点击歌词区域不再切换控制栏，只有上下滑动歌词才切换显隐。
-- **发布**：`versionName` 与 tag 保持一致（当前 2.3.4 / versionCode 9）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
+- **发布**：`versionName` 与 tag 保持一致（当前 2.3.5 / versionCode 10）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
 
 ## v2.3.0 起：播客体验与播放记忆
 
@@ -109,3 +109,18 @@
 - **播客续播记录**：新增 `data/model/domain/RecentPodcast.kt`（`RecentPodcastEpisode` + `RecentPodcastCodec`）与 `PreferenceKeys.RecentPodcastKey`。`MusicService.recordRecentPodcast` 在 `onMediaItemTransition` 写电台/集信息（同一集保留原进度），`updateRecentPodcastProgress` 跟随 10 秒落库更新位置；听普通歌曲不会覆盖。
 - **音乐库播客区块**：`LibrarySection.PODCASTS` 由原来的单行入口改为「标题『我关注的播客』+ 通栏卡片」（`LibraryPodcastCard`，样式抄 `LibraryLikedPlaylist`）。有记录时卡片显示电台名、最近一集、`已听 mm:ss / mm:ss`，点卡进电台页、点右下播放键直接续播该集（单集 `ListQueue`，进度由记忆播放恢复）；无记录时显示「还没有收听记录，去挑一部评书」。手机与平板都走这个区块，`LibraryPodcastEntry.kt` 目前没有调用方。
 - **电台页定位**：`PodcastDetailScreen` 首次进入时若当前播放的正是该电台的某一集，自动 `scrollToItem(index + 3)`（前三个 item 是封面头、搜索框、排序行），从卡片点进来不用再下滑找集数。
+
+## v2.3.5 起：进度不再丢、听完留痕、队列显示收听状态
+
+- **进度判定改由元数据时长主导**：`MusicService.sampleProgress` 改成 `mediaMetadata.durationMs → MediaMetadata.duration → player.duration` 的取值顺序。ExoPlayer 对 VBR mp3 的 `duration` 常常偏小，原来拿它判「距结尾不足 20 秒」，会把没听完的集数误判成听完，接着 `dao.delete()` 掉记录，下次点开就从 0 开始——这是「进度丢失」的主因。
+- **听完不再删行**：`playback_progress` 加 `completed` 列（DB 20 → 21，`MIGRATION_20_21` 默认 0）。`PlaybackProgressRepository.record` 到结尾附近写 `completed = true, positionMs = 0`，重听时被新进度覆盖回 false；`resumePositionOf` 对 `completed` 返回 null 并**不再顺手删行**。删行会让列表和队列分不清「听完了」和「没点过」。
+- **短曲不判听完**：`PlaybackProgressPolicy.MIN_END_TRACK_MS = 60_000`；`positionMs > durationMs` 视为时长不可信，既不判听完也不算比例。旧 `shouldKeep` 已移除。
+- **落库节奏**：采样仍是每秒，落库 10 秒 → 5 秒（`ticks % 5`），并跳过「暂停时位置没变」的重复写入。界面直接读这张表，间隔太长会看到明显滞后。
+- **播客身份判定不再只靠登记表**：`persistProgress` 收 `isPodcast` 参数，由 `queueSource.type == PODCAST || PodcastTrackRegistry.contains(id)` 决定；`PodcastTrackRegistry` 上限 512 → 2048，超限**按登记顺序淘汰最旧 256 条**（原来 `ids.clear()` 全清，清完历史播客会被当成普通歌曲，进度链路当场断掉）。持久化格式改为有序字符串 `ids_ordered`，兼容读旧的 `ids` 集合。
+- **播客页进度标注**：`PodcastDetailScreen.PodcastProgramRow` 收 `PlaybackProgress?`，副标题追加「已听 12:30 / 51:08」或「已听完」，下面加 2dp `ListenProgressBar`（听完用次要色、未听完用 primary、没听过的不画）。封面区显示「共 161 集 · 已播 40 集」，`completedCount` 按整台节目算，不受搜索框影响。
+- **队列也显示收听状态**：`PlaylistBottomSheet.QueueTrackRow` 对播客行把副标题换成「未播放 · 47:12 / 已听 12:30 / 51:08 / 已听完」，并加同样的 2dp 进度条；普通歌曲行不变。进度来自 `service.progressRepository.observeBySong()`，纯本地无请求；**当前播放那一行用 `player.currentPosition` 每秒刷新**，否则会停在上一次落库的位置。行高仍是 56dp。
+- **卡片进度改读本地表**：`LibraryPodcastCard` 新增 `progress: PlaybackProgress?`，优先用表里的位置，偏好里的副本只做兜底——原来的副本依赖 `updateRecentPodcastProgress` 的登记表判断，断链后会永远停在 0:00。
+- **卡片播放键排整张节目表**：新增 `PodcastPlaybackViewModel`（`ui/screen/podcast/`），点播放键时后台按 500/页拉完整节目表，用 `ListQueue.startingAt(songId)` 以该集为起点入队，才能连续播上一集/下一集；按钮转圈表示准备中，拉不到才回落到单集并用 Toast 说明。原来直接塞单集 `ListQueue`，点完队列里就只剩一首。
+- **电台页加载抗限流**：`PodcastViewModel` 分页 50 → 500（`MAX_PAGES = 3`），161 集一次到位；网络类错误退避重试 2 次（800ms / 2s）；错误文案按码区分（405/429/460/503 → 「查询过于频繁，请等几十秒再试」，301/302 → 登录失效）。命中频控进入 30 秒冷却（`retryInSeconds`），冷却期间点重试不发请求，底部提示倒计时；失败时保留已加载列表，不用整页错误面板顶掉。`PodcastRepository.programs` 的异常文案同步改造。
+
+**已知限制**：升级前听完的集数，记录已被旧代码删除，升级后这些集会显示「未播放」，要等下次听到 15 秒以上才有记录；旧数据无法追溯。小时级节目在列表里仍按「分钟:秒」显示（如 `125:03`），与 `TimeUtils.formatDuration` 的既有约定一致。

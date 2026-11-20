@@ -1,5 +1,6 @@
 package com.ljyh.mei.ui.screen.main.library.component
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,14 +19,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ljyh.mei.constants.RecentPodcastKey
 import com.ljyh.mei.data.model.domain.MediaMetadata
 import com.ljyh.mei.data.model.domain.RecentPodcastCodec
+import com.ljyh.mei.data.model.domain.RecentPodcastEpisode
 import com.ljyh.mei.data.model.domain.toMediaItem
 import com.ljyh.mei.playback.queue.ListQueue
 import com.ljyh.mei.playback.queue.QueueSource
@@ -45,6 +50,7 @@ import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerConnection
 import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.ui.screen.main.library.*
+import com.ljyh.mei.ui.screen.podcast.PodcastPlaybackViewModel
 import com.ljyh.mei.utils.preferences.rememberPreference
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
@@ -580,10 +586,21 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobilePodcastSection(
     item(key = "mobile_podcast_card") {
         val nav = LocalNavController.current
         val playerConnection = LocalPlayerConnection.current
+        val context = LocalContext.current
+        val scope = rememberCoroutineScope()
+        // 播放键要先把整张节目表拉下来才能排成队列，所以走播客侧的视图模型，
+        // 顺便把本地进度表读进来，卡片上的「已听」不再依赖偏好里那份副本。
+        val playback: PodcastPlaybackViewModel = hiltViewModel()
         val raw by rememberPreference(RecentPodcastKey, "")
         val recent = remember(raw) { RecentPodcastCodec.decode(raw) }
+        val progressBySong by playback.progressBySong.collectAsStateWithLifecycle()
+        val preparingId by playback.preparingId.collectAsStateWithLifecycle()
+        val songId = recent?.songId?.toString()
+        val playing = preparingId != null && preparingId == songId
         LibraryPodcastCard(
             recent = recent,
+            progress = songId?.let { progressBySong[it] },
+            playing = playing,
             height = cardHeight,
             modifier = Modifier.padding(rowPadding),
             canPlay = canPlay,
@@ -593,35 +610,44 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobilePodcastSection(
                 }
             },
             onPlay = {
-                val episode = recent ?: return@LibraryPodcastCard
-                val meta = MediaMetadata(
-                    id = episode.songId,
-                    title = episode.episodeTitle,
-                    coverUrl = episode.coverUrl,
-                    artists = listOf(
-                        MediaMetadata.Artist(0L, episode.artist.ifBlank { "网易云播客" })
-                    ),
-                    duration = episode.durationMs,
-                    album = MediaMetadata.Album(id = episode.radioId, title = episode.radioName),
-                    isPodcast = true,
-                    neteaseId = episode.songId,
-                )
-                playerConnection?.playQueue(
-                    ListQueue(
-                        id = "podcast_${episode.radioId}",
-                        title = episode.radioName.ifBlank { "播客" },
-                        items = listOf(episode.songId.toString() to meta.toMediaItem()),
-                        startIndex = 0,
-                        source = QueueSource(
-                            QueueSource.Type.PODCAST,
-                            episode.radioId.toString(),
-                            episode.radioName,
-                        ),
-                    ),
-                    startInShuffleMode = false,
-                )
+                val episode = recent
+                if (episode != null && !playing) {
+                    scope.launch {
+                        // 用整张节目表入队并定位到这一集，才能继续上一集/下一集；
+                        // 拉不到时才回落到「只播这一集」，并明确告诉用户原因。
+                        val queue = playback.buildQueue(episode)
+                        val connection = playerConnection ?: return@launch
+                        if (queue != null) {
+                            connection.playQueue(queue, startInShuffleMode = false)
+                        } else {
+                            connection.playQueue(episode.asSingleQueue(), startInShuffleMode = false)
+                            Toast.makeText(context, "节目表加载失败，先播放这一集", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
             },
             onBrowse = { Screen.Podcasts.navigate(nav) },
         )
     }
+}
+
+/** 进度表拉不到时的兜底：只播这一集。 */
+private fun RecentPodcastEpisode.asSingleQueue(): ListQueue {
+    val meta = MediaMetadata(
+        id = songId,
+        title = episodeTitle,
+        coverUrl = coverUrl,
+        artists = listOf(MediaMetadata.Artist(0L, artist.ifBlank { "网易云播客" })),
+        duration = durationMs,
+        album = MediaMetadata.Album(id = radioId, title = radioName),
+        isPodcast = true,
+        neteaseId = songId,
+    )
+    return ListQueue(
+        id = "podcast_$radioId",
+        title = radioName.ifBlank { "播客" },
+        items = listOf(songId.toString() to meta.toMediaItem()),
+        startIndex = 0,
+        source = QueueSource(QueueSource.Type.PODCAST, radioId.toString(), radioName),
+    )
 }
