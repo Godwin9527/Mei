@@ -7,6 +7,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.source.ShuffleOrder
+import com.ljyh.mei.data.model.domain.MediaMetadata
 import com.ljyh.mei.data.model.domain.PLACEHOLDER_URI
 import com.ljyh.mei.data.model.domain.createPlaceholder
 import com.ljyh.mei.data.model.domain.toMediaItem
@@ -21,6 +22,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
+
+/** 播客节目表一次取多少条；评书类电台常见上百集。 */
+private const val PODCAST_PROGRAM_LIMIT = 500
+
+/** 同一电台补全失败后，这段时间内不再重试，避免滚动时反复打接口。 */
+private const val PODCAST_RETRY_COOLDOWN_MS = 60L * 60_000L
 
 internal fun prioritizeInsertedShuffleItems(
     order: List<Int>,
@@ -44,6 +51,10 @@ class PlaybackQueueManager(
     private val TAG = "QueueManager"
     private val _queueState = MutableStateFlow<QueueState>(QueueState.Idle)
     private val loadingIds = ConcurrentHashMap.newKeySet<String>()
+
+    /** 电台 id → (可播 id → 节目元数据)，只用节目表补一回。 */
+    private val podcastProgramCache = ConcurrentHashMap<Long, Map<String, MediaMetadata>>()
+    private val podcastFetchFailedAt = ConcurrentHashMap<Long, Long>()
 
     private val _isShuffleModeEnabled = MutableStateFlow(false)
     var isFmMode = false
@@ -314,16 +325,34 @@ class PlaybackQueueManager(
 
     private suspend fun loadMetadataAtIndices(indices: Iterable<Int>) {
         val indicesToCheck = indices.filter { it >= 0 && it < player.mediaItemCount }.toList()
+        // 播客队列按电台归类：这些 id 在 /song/detail 里查不到标题（只有时长），
+        // 换一条路用节目表还原，否则永远停在「加载中」。
+        val placeholdersByRadio = mutableMapOf<Long, MutableSet<String>>()
         val itemsNeedLoading = indicesToCheck.mapNotNull { index ->
             val item = player.getMediaItemAt(index)
             val isPlaceholder = item.localConfiguration?.uri.toString() == PLACEHOLDER_URI
             val id = item.mediaId
-            if (isPlaceholder && loadingIds.add(id)) id else null
+            if (!isPlaceholder || !loadingIds.add(id)) return@mapNotNull null
+            val radioId = item.queueSource
+                ?.takeIf { it.type == QueueSource.Type.PODCAST }
+                ?.id?.toLongOrNull()?.takeIf { it > 0L }
+            if (radioId != null) placeholdersByRadio.getOrPut(radioId) { mutableSetOf() }.add(id)
+            id
         }
         if (itemsNeedLoading.isEmpty()) return
 
         try {
-            val loadedItems = withContext(Dispatchers.IO) { loadSongDetails(itemsNeedLoading) }
+            val podcastIds = placeholdersByRadio.values.flatten().toSet()
+            val podcastItems = placeholdersByRadio.flatMap { (radioId, ids) ->
+                loadPodcastEpisodes(radioId, ids)
+            }
+            val songIds = itemsNeedLoading.filterNot { it in podcastIds }
+            val songItems = if (songIds.isNotEmpty()) {
+                withContext(Dispatchers.IO) { loadSongDetails(songIds) }
+            } else {
+                emptyList()
+            }
+            val loadedItems = podcastItems + songItems
             if (loadedItems.isNotEmpty()) {
                 if (player.mediaItemCount == 0) return
                 // 播客的 mainSong.id 在 /song/detail 里通常只返回时长，标题和封面是空的。
@@ -418,9 +447,53 @@ class PlaybackQueueManager(
         }
     }
 
+    /**
+     * 用电台节目表补全播客队列里的占位符。
+     *
+     * 播客的 `mainSong.id` 在 `/song/detail` 里只回时长，标题和封面都是空的，所以这里
+     * 换成 `/dj/program/byradio`，拿节目名/封面/主播重建完整的 [MediaMetadata]。
+     * 同一个电台一小时内只失败重试一次，避免滚动时反复打接口。
+     */
+    private suspend fun loadPodcastEpisodes(radioId: Long, ids: Set<String>): List<MediaItem> {
+        if (ids.isEmpty()) return emptyList()
+        val index = podcastProgramCache[radioId] ?: run {
+            val lastFailure = podcastFetchFailedAt[radioId] ?: 0L
+            if (System.currentTimeMillis() - lastFailure < PODCAST_RETRY_COOLDOWN_MS) return emptyList()
+            val fetched = withContext(Dispatchers.IO) {
+                try {
+                    val response = weApiService.getRadioPrograms(
+                        radioId = radioId,
+                        limit = PODCAST_PROGRAM_LIMIT,
+                        offset = 0,
+                        asc = true,
+                    )
+                    if (response.code == 200 || response.code == 0) {
+                        response.programs
+                            .mapNotNull { it.toMediaMetadata() }
+                            .associateBy { it.id.toString() }
+                    } else {
+                        emptyMap()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to load podcast programs for $radioId", e)
+                    emptyMap()
+                }
+            }
+            if (fetched.isEmpty()) {
+                podcastFetchFailedAt[radioId] = System.currentTimeMillis()
+                return emptyList()
+            }
+            podcastProgramCache[radioId] = fetched
+            fetched
+        }
+        return ids.mapNotNull { index[it]?.toMediaItem() }
+    }
+
     fun release() {
         player.removeListener(this)
         loadingIds.clear()
+        podcastProgramCache.clear()
+        podcastFetchFailedAt.clear()
         // 不要 cancel scope，因为它是由外部 Service 传进来的
     }
 

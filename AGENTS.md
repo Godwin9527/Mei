@@ -49,7 +49,7 @@
 - **播客播放保护**：`playback/source/PodcastTrackRegistry.kt` 记录播客歌曲 id（**SharedPreferences 持久化**，`AppContext.onCreate` 调 `install`）；`MediaUriProvider` 对命中项固定 `standard` 音质并跳过 LX／解灰兜底（否则会白等 15 秒）。普通歌曲在目标音质取不到地址时，会再降级试一次 `standard`。
 - **应用内更新**：`data/repository/UpdateRepository.kt` + `ui/screen/update/`，入口在 设置 → 检查更新；安装包下载到 `filesDir/updates`，经 `FileProvider`（authority `${applicationId}.fileprovider`）交给系统安装器；需要 `REQUEST_INSTALL_PACKAGES` 权限。Release 资源名由 `tools/ci/prepare-apks.py` 生成，格式 `Mei_<tag>_<abi>.apk`，更新逻辑按 ABI 匹配。
 - **歌词页控制栏**：`PreferenceKeys.LyricsControlsAutoHideKey`（默认 false）控制是否 3 秒自动收起；点击歌词区域不再切换控制栏，只有上下滑动歌词才切换显隐。
-- **发布**：`versionName` 与 tag 保持一致（当前 2.3.3 / versionCode 8）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
+- **发布**：`versionName` 与 tag 保持一致（当前 2.3.4 / versionCode 9）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
 
 ## v2.3.0 起：播客体验与播放记忆
 
@@ -100,3 +100,12 @@
 - `MusicService.resumeFromProgress`：播放器还没解析出时长时退回 `MediaMetadata.duration` 兜底；播客距结尾 90 秒内不自动续播（普通歌曲仍是 3 秒），避免「一进来就快没了」。
 
 **升级代价**：v1 缓存不再命中，首次播放会重新下载。旧条目不会被复用，由 LRU 淘汰或用户在 设置 → 缓存 → 音乐缓存 手动清理。
+
+## v2.3.4 起：队列显示与播客续播入口
+
+- **队列标题统一单行**：`PlaylistBottomSheet.QueueTrackRow` 改成 13sp 单行 + `basicMarquee()`，封面 48→44、拖拽手柄 48→40、移除按钮 48→36、行高 64→56、边距收紧，文字区从约 168dp 涨到约 197dp。原实现只有 `metadata.isPodcast == true` 才给两行，占位符行走 else 分支，于是同一列表里两行/一行混杂——这也是用户看到「031 两行、032 一行」的原因。
+- **队列元数据补全分流**：`PlaybackQueueManager.loadMetadataAtIndices` 按 `queueSource.type == PODCAST` 把占位符归到电台，走 `/dj/program/byradio`（`loadPodcastEpisodes`，一次取 500 条，按 `mainSong.id` 建索引）而不是 `/song/detail`；后者对播客 id 只返回时长，配上 2.3.2 的空标题过滤，会让那一行永远停在「加载中」。失败电台一小时冷却一次，`release()` 清缓存。
+- **快照不再漏存播客项**：`MusicService.snapshotPodcastSongs` 原来要求 `tag` 是 `MediaMetadata`；被 `/song/detail` 结果替换过的条目 tag 是 `SongEntity`，会被整条跳过，下次恢复又退回占位符。现在只要是播客队列的项就存，tag 缺失时用 `MediaMetadata` 的标题/封面/时长兜底，空标题和「加载中...」不存。
+- **播客续播记录**：新增 `data/model/domain/RecentPodcast.kt`（`RecentPodcastEpisode` + `RecentPodcastCodec`）与 `PreferenceKeys.RecentPodcastKey`。`MusicService.recordRecentPodcast` 在 `onMediaItemTransition` 写电台/集信息（同一集保留原进度），`updateRecentPodcastProgress` 跟随 10 秒落库更新位置；听普通歌曲不会覆盖。
+- **音乐库播客区块**：`LibrarySection.PODCASTS` 由原来的单行入口改为「标题『我关注的播客』+ 通栏卡片」（`LibraryPodcastCard`，样式抄 `LibraryLikedPlaylist`）。有记录时卡片显示电台名、最近一集、`已听 mm:ss / mm:ss`，点卡进电台页、点右下播放键直接续播该集（单集 `ListQueue`，进度由记忆播放恢复）；无记录时显示「还没有收听记录，去挑一部评书」。手机与平板都走这个区块，`LibraryPodcastEntry.kt` 目前没有调用方。
+- **电台页定位**：`PodcastDetailScreen` 首次进入时若当前播放的正是该电台的某一集，自动 `scrollToItem(index + 3)`（前三个 item 是封面头、搜索框、排序行），从卡片点进来不用再下滑找集数。

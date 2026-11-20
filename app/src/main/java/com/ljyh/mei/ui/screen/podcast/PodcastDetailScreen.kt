@@ -101,6 +101,19 @@ fun PodcastDetailScreen(
 
     LaunchedEffect(radioId) { viewModel.openRadio(radioId) }
 
+    // 从音乐库卡片进来时直接定位到正在播的那一集，省掉大量下滑。
+    val playingSongId = playerConnection?.player?.currentMediaItem?.mediaId
+    var positionedOnPlaying by remember(radioId) { mutableStateOf(false) }
+    LaunchedEffect(radioId, state.programs.size, playingSongId) {
+        if (positionedOnPlaying || state.programs.isEmpty()) return@LaunchedEffect
+        val songId = playingSongId ?: return@LaunchedEffect
+        val index = state.programs.indexOfFirst { (it.mainSong?.id ?: 0L).toString() == songId }
+        if (index < 0) return@LaunchedEffect
+        positionedOnPlaying = true
+        // 列表前三个是封面头、搜索框、排序行。
+        listState.scrollToItem(index + 3)
+    }
+
     val radio = state.radio
     val title = radio?.name?.takeIf { it.isNotBlank() } ?: "播客"
 

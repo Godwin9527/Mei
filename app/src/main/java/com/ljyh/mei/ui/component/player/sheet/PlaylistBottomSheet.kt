@@ -2,6 +2,7 @@ package com.ljyh.mei.ui.component.player.sheet
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,12 +52,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import coil3.compose.AsyncImage
 import com.ljyh.mei.data.model.domain.MediaMetadata
+import com.ljyh.mei.data.model.domain.PLACEHOLDER_URI
 import com.ljyh.mei.data.model.domain.metadata
 import com.ljyh.mei.extensions.mediaItems
 import com.ljyh.mei.playback.queue.queueEntryId
@@ -268,21 +271,27 @@ private fun QueueTrackRow(
         else -> Color.Transparent
     }
     val titleColor = if (isCurrentPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+    val isPending = item.localConfiguration?.uri.toString() == PLACEHOLDER_URI
     val subtitle = metadata?.let {
         val artists = it.artists.joinToString(", ") { artist -> artist.name }
         if (artists.isBlank()) formatDuration(it.duration) else "$artists · ${formatDuration(it.duration)}"
-    } ?: "正在获取歌曲信息"
+    } ?: if (isPending) {
+        "正在获取歌曲信息"
+    } else {
+        // 没拿到元数据又不是占位符：接口确实查不到，不再假装还在加载。
+        "未知节目"
+    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .heightIn(min = 64.dp)
+            .padding(vertical = 1.dp)
+            .heightIn(min = 56.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(background)
             .clickable(onClick = onItemClick)
-            .padding(start = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(start = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (metadata?.coverUrl?.isNotBlank() == true) {
@@ -290,11 +299,11 @@ private fun QueueTrackRow(
                 model = metadata.coverUrl,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)),
+                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)),
             )
         } else {
             Box(
-                Modifier.size(48.dp).clip(RoundedCornerShape(8.dp))
+                Modifier.size(44.dp).clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                 contentAlignment = Alignment.Center,
             ) {
@@ -305,27 +314,38 @@ private fun QueueTrackRow(
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
             Text(
                 text = metadata?.title ?: item.mediaMetadata.title?.toString() ?: "正在加载歌曲",
-                style = MaterialTheme.typography.bodyMedium,
+                // 统一单行 13sp，把宽度让给标题；放不下时横向滚动，不再用省略号吃掉末尾集数。
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
                 fontWeight = if (isCurrentPlaying) FontWeight.Bold else FontWeight.Medium,
                 color = titleColor,
-                // 播客标题常带部和集数（「王玥波雍正剑侠图第7部 132」），单行会把末尾数字吃掉。
-                maxLines = if (metadata?.isPodcast == true) 2 else 1,
-                overflow = TextOverflow.Ellipsis,
+                maxLines = 1,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier.basicMarquee(),
             )
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
 
-        Box(modifier = dragHandle.size(48.dp), contentAlignment = Alignment.Center) {
-            Icon(Icons.Rounded.DragHandle, contentDescription = "长按调整顺序", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(modifier = dragHandle.size(40.dp), contentAlignment = Alignment.Center) {
+            Icon(
+                Icons.Rounded.DragHandle,
+                contentDescription = "长按调整顺序",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
         }
-        IconButton(onClick = onRemoveClick, modifier = Modifier.size(48.dp)) {
-            Icon(Icons.Filled.Close, contentDescription = "从队列移除", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        IconButton(onClick = onRemoveClick, modifier = Modifier.size(36.dp)) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "从队列移除",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }

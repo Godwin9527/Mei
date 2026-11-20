@@ -23,6 +23,12 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import com.ljyh.mei.constants.RecentPodcastKey
+import com.ljyh.mei.data.model.domain.MediaMetadata
+import com.ljyh.mei.data.model.domain.RecentPodcastCodec
+import com.ljyh.mei.data.model.domain.toMediaItem
+import com.ljyh.mei.playback.queue.ListQueue
+import com.ljyh.mei.playback.queue.QueueSource
 import com.ljyh.mei.ui.component.MeiSectionTitle
 import com.ljyh.mei.ui.component.MeiShowAllButton
 import com.ljyh.mei.ui.component.MeiStatePanel
@@ -35,7 +41,11 @@ import com.ljyh.mei.ui.component.layout.meiPageGutter
 import com.ljyh.mei.ui.component.layout.meiPageHorizontalPadding
 import com.ljyh.mei.ui.component.utils.rememberDeviceInfo
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
+import com.ljyh.mei.ui.local.LocalNavController
+import com.ljyh.mei.ui.local.LocalPlayerConnection
+import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.ui.screen.main.library.*
+import com.ljyh.mei.utils.preferences.rememberPreference
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 
@@ -283,9 +293,7 @@ fun LibraryBrowseLayout(
                                 }
                             }
                         }
-                        item(key = "podcasts_entry") {
-                            LibraryPodcastEntry(Modifier.padding(rowPadding))
-                        }
+                        mobilePodcastSection(rowPadding, 190.dp, canPlay)
                         if (state is LibraryUiState.Content && state.warning != null) item(key = "warning") {
                             Row(
                                 Modifier
@@ -390,9 +398,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobileLibraryContent(
                 data, rowPadding, onOpenAlbum, onOpenCollection,
             )
 
-            LibrarySection.PODCASTS -> item(key = "podcasts_entry") {
-                LibraryPodcastEntry(Modifier.padding(rowPadding))
-            }
+            LibrarySection.PODCASTS -> mobilePodcastSection(
+                rowPadding, likedHeight, canPlay,
+            )
         }
     }
 }
@@ -545,5 +553,75 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobileAlbumsSection(
                 ) { onOpenAlbum(album.id) }
             }
         }
+    }
+}
+
+/**
+ * 「我关注的播客」：标题 + 通栏卡片，结构对齐「我创建的歌单」。
+ *
+ * 卡片主体是最近收听的那一集：点卡进电台节目单，点右下播放键直接接着上次的进度播，
+ * 不用再走「音乐库 → 我关注的播客 → 找电台 → 下滑找集数」这条路。
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope.mobilePodcastSection(
+    rowPadding: PaddingValues,
+    cardHeight: Dp,
+    canPlay: Boolean,
+) {
+    item(key = "mobile_podcast_heading") {
+        val nav = LocalNavController.current
+        LibrarySectionHeading(
+            "我关注的播客",
+            true,
+            Modifier
+                .padding(rowPadding)
+                .padding(top = 8.dp)
+        ) { Screen.Podcasts.navigate(nav) }
+    }
+    item(key = "mobile_podcast_card") {
+        val nav = LocalNavController.current
+        val playerConnection = LocalPlayerConnection.current
+        val raw by rememberPreference(RecentPodcastKey, "")
+        val recent = remember(raw) { RecentPodcastCodec.decode(raw) }
+        LibraryPodcastCard(
+            recent = recent,
+            height = cardHeight,
+            modifier = Modifier.padding(rowPadding),
+            canPlay = canPlay,
+            onOpen = {
+                recent?.let {
+                    Screen.PodcastDetail.navigate(nav) { addPath(it.radioId.toString()) }
+                }
+            },
+            onPlay = {
+                val episode = recent ?: return@LibraryPodcastCard
+                val meta = MediaMetadata(
+                    id = episode.songId,
+                    title = episode.episodeTitle,
+                    coverUrl = episode.coverUrl,
+                    artists = listOf(
+                        MediaMetadata.Artist(0L, episode.artist.ifBlank { "网易云播客" })
+                    ),
+                    duration = episode.durationMs,
+                    album = MediaMetadata.Album(id = episode.radioId, title = episode.radioName),
+                    isPodcast = true,
+                    neteaseId = episode.songId,
+                )
+                playerConnection?.playQueue(
+                    ListQueue(
+                        id = "podcast_${episode.radioId}",
+                        title = episode.radioName.ifBlank { "播客" },
+                        items = listOf(episode.songId.toString() to meta.toMediaItem()),
+                        startIndex = 0,
+                        source = QueueSource(
+                            QueueSource.Type.PODCAST,
+                            episode.radioId.toString(),
+                            episode.radioName,
+                        ),
+                    ),
+                    startInShuffleMode = false,
+                )
+            },
+            onBrowse = { Screen.Podcasts.navigate(nav) },
+        )
     }
 }

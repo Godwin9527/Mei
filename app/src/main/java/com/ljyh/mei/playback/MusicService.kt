@@ -69,8 +69,11 @@ import com.ljyh.mei.constants.LastPlaybackQueueKey
 import com.ljyh.mei.constants.MusicQuality
 import com.ljyh.mei.constants.MusicQualityKey
 import com.ljyh.mei.constants.RepeatModeKey
+import com.ljyh.mei.constants.RecentPodcastKey
 import com.ljyh.mei.constants.UsbExclusivePlaybackKey
 import com.ljyh.mei.data.model.domain.MediaMetadata
+import com.ljyh.mei.data.model.domain.RecentPodcastCodec
+import com.ljyh.mei.data.model.domain.RecentPodcastEpisode
 import com.ljyh.mei.data.model.domain.SongEntity
 import com.ljyh.mei.data.model.domain.createPlaceholder
 import com.ljyh.mei.data.model.domain.toMediaItem
@@ -563,6 +566,9 @@ class MusicService : MediaLibraryService(),
 
     private fun persistProgress(id: String, positionMs: Long, durationMs: Long) {
         if (id.isBlank() || positionMs <= 0) return
+        if (PodcastTrackRegistry.contains(id)) {
+            updateRecentPodcastProgress(id, positionMs, durationMs)
+        }
         scope.launch {
             try {
                 progressRepository.record(id, positionMs, durationMs)
@@ -601,6 +607,68 @@ class MusicService : MediaLibraryService(),
                 "从 ${formatProgressTime(position)} 继续播放",
                 Toast.LENGTH_SHORT,
             ).show()
+        }
+    }
+
+    /**
+     * 记下「最近收听的那一集播客」，音乐库的播客卡片据此一步续播。
+     * 只在播客曲目上写，听普通歌曲不会覆盖。
+     */
+    private fun recordRecentPodcast(item: MediaItem) {
+        val source = item.queueSource
+        if (source?.type != QueueSource.Type.PODCAST) return
+        val meta = item.localConfiguration?.tag as? MediaMetadata ?: return
+        val radioId = source.id?.toLongOrNull()?.takeIf { it > 0 } ?: meta.album.id
+        if (radioId <= 0L || meta.id <= 0L) return
+        val episode = RecentPodcastEpisode(
+            radioId = radioId,
+            radioName = meta.album.title,
+            coverUrl = meta.coverUrl,
+            songId = meta.id,
+            episodeTitle = meta.title,
+            artist = meta.artists.joinToString(", ") { it.name },
+            durationMs = meta.duration,
+            positionMs = 0L,
+            updatedAt = System.currentTimeMillis(),
+        )
+        scope.launch {
+            try {
+                context.dataStore.edit { preferences ->
+                    // 同一集重复切换不要清零进度。
+                    val current = RecentPodcastCodec.decode(preferences[RecentPodcastKey])
+                    val position = current?.takeIf { it.songId == episode.songId }?.positionMs ?: 0L
+                    preferences[RecentPodcastKey] =
+                        RecentPodcastCodec.encode(episode.copy(positionMs = position))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.tag("MusicService").e(e, "Failed to record recent podcast")
+            }
+        }
+    }
+
+    /** 跟着播放进度更新卡片上的「已听」位置，只在同一集内生效。 */
+    private fun updateRecentPodcastProgress(songId: String, positionMs: Long, durationMs: Long) {
+        scope.launch {
+            try {
+                context.dataStore.edit { preferences ->
+                    val current = RecentPodcastCodec.decode(preferences[RecentPodcastKey]) ?: return@edit
+                    if (current.songId.toString() != songId) return@edit
+                    if (kotlin.math.abs(current.positionMs - positionMs) < 5_000L) return@edit
+                    preferences[RecentPodcastKey] = RecentPodcastCodec.encode(
+                        current.copy(
+                            positionMs = positionMs,
+                            durationMs = durationMs.takeIf { it > 0L } ?: current.durationMs,
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.tag("MusicService").e(e, "Failed to update recent podcast progress")
+            }
         }
     }
 
@@ -679,15 +747,25 @@ class MusicService : MediaLibraryService(),
     private fun snapshotPodcastSongs(items: List<MediaItem>): List<PodcastQueueSong>? {
         val podcasts = items.mapNotNull { item ->
             val meta = item.localConfiguration?.tag as? MediaMetadata
-            if (meta?.isPodcast != true) return@mapNotNull null
+            val fromPodcastQueue = item.queueSource?.type == QueueSource.Type.PODCAST
+            if (meta?.isPodcast != true && !fromPodcastQueue) return@mapNotNull null
+            // 播客项可能被 /song/detail 的返回值替换过，tag 只剩 SongEntity；
+            // 这时退回 MediaItem 自带的元数据，否则整条记录会在快照里消失，
+            // 下次恢复又变回占位符（就是「一直显示正在获取歌曲信息」那类空行）。
+            val title = meta?.title?.takeIf { it.isNotBlank() }
+                ?: item.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() && it != "加载中..." }
+                ?: return@mapNotNull null
             PodcastQueueSong(
                 id = item.mediaId,
-                title = meta.title,
-                cover = meta.coverUrl,
-                artist = meta.artists.joinToString(", ") { it.name },
-                album = meta.album.title,
-                duration = meta.duration,
-                artistId = meta.artists.firstOrNull()?.id ?: 0L,
+                title = title,
+                cover = meta?.coverUrl ?: item.mediaMetadata.artworkUri?.toString().orEmpty(),
+                artist = meta?.artists?.joinToString(", ") { it.name }
+                    ?: item.mediaMetadata.artist?.toString().orEmpty(),
+                album = meta?.album?.title ?: item.mediaMetadata.albumTitle?.toString().orEmpty(),
+                duration = meta?.duration?.takeIf { it > 0L }
+                    ?: item.mediaMetadata.durationMs?.takeIf { it > 0L }
+                    ?: 0L,
+                artistId = meta?.artists?.firstOrNull()?.id ?: 0L,
             )
         }
         return podcasts.takeIf { it.isNotEmpty() }
@@ -1113,6 +1191,7 @@ class MusicService : MediaLibraryService(),
         if (mediaItem != null && reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
             sampleProgress(persist = false)
             resumeFromProgress(mediaItem.mediaId)
+            recordRecentPodcast(mediaItem)
         }
     }
 

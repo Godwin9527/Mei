@@ -96,6 +96,9 @@ const val DefaultPodcastTextSize = 15
 /** 播客节目列表排序方式，记住上次选择。 */
 val PodcastSortKey = stringPreferencesKey("podcast.sort")
 
+/** 最近收听的那一集播客，音乐库卡片据此直接续播。JSON，见 RecentPodcastCodec。 */
+val RecentPodcastKey = stringPreferencesKey("podcast.recentEpisode")
+
 /** 音乐库区块顺序，按逗号分隔的区块 id 保存。 */
 val LibrarySectionOrderKey = stringPreferencesKey("library.sectionOrder")
 
