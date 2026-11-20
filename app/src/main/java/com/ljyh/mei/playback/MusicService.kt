@@ -562,8 +562,10 @@ class MusicService : MediaLibraryService(),
         // 优先用元数据里的时长：ExoPlayer 对 VBR 文件给的 duration 常常偏小，
         // 拿它判断「接近结尾」会把没听完的集数误判成听完。
         val metaDuration = (item.localConfiguration?.tag as? MediaMetadata)?.duration ?: 0L
-        val duration = listOf(item.mediaMetadata.durationMs, metaDuration, player.duration)
-            .firstOrNull { it > 0L } ?: 0L
+        val duration = item.mediaMetadata.durationMs?.takeIf { it > 0L }
+            ?: metaDuration.takeIf { it > 0L }
+            ?: player.duration.takeIf { it > 0L }
+            ?: 0L
         val isPodcast = item.queueSource?.type == QueueSource.Type.PODCAST ||
             PodcastTrackRegistry.contains(id)
         val previousId = sampledMediaId

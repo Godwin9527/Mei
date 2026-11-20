@@ -54,6 +54,7 @@ import com.ljyh.mei.ui.screen.podcast.PodcastPlaybackViewModel
 import com.ljyh.mei.utils.preferences.rememberPreference
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
+import kotlinx.coroutines.launch
 
 /** Artwork composition leads the overview; secondary collections retain their own browsing rhythm. */
 @OptIn(ExperimentalMaterial3Api::class)
