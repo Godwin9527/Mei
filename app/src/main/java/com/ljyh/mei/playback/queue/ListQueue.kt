@@ -21,11 +21,24 @@ class ListQueue(
     override val loadedCount: Int = items.size
     override val preloadItem: String? = null
 
-    /** Use the song tapped in the visible list, even if the caller supplied a stale index. */
-    fun startingAt(trackId: String): ListQueue? {
+    /**
+     * Use the song tapped in the visible list, even if the caller supplied a stale index.
+     *
+     * [positionMs] 是「上次听到哪」的起点：直接交给 setMediaItems 的 startPosition，
+     * 播放器第一帧就在正确位置，不必等 onMediaItemTransition 里再 seek（那个时机
+     * 播放器还没 prepare，seek 常常被丢掉，表现就是从头播）。
+     */
+    fun startingAt(trackId: String, positionMs: Int = position): ListQueue? {
         val index = items.indexOfFirst { it.first == trackId }
         if (index < 0) return null
-        return ListQueue(id, title, items, startIndex = index, source = source)
+        return ListQueue(
+            id = id,
+            title = title,
+            items = items,
+            startIndex = index,
+            position = positionMs.coerceAtLeast(0),
+            source = source,
+        )
     }
 
     private val _state = MutableStateFlow<Queue.QueueState>(Queue.QueueState.Idle)

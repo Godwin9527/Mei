@@ -94,4 +94,13 @@ object PlaybackProgressPolicy {
         if (!durationTrustworthy(positionMs, durationMs)) return false
         return positionMs >= durationMs - END_GUARD_MS
     }
+
+    /**
+     * 界面上已经拿到这一行的进度时，用它算「该从哪继续」。
+     * 和 [PlaybackProgressRepository.resumePositionOf] 同一套门槛，避免两处判断不一致。
+     */
+    fun resumePosition(saved: PlaybackProgress?): Long? {
+        if (saved == null || saved.completed) return null
+        return saved.positionMs.takeIf { it >= MIN_RESUME_MS }
+    }
 }

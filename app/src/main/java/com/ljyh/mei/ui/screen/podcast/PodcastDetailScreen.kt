@@ -66,6 +66,7 @@ import com.ljyh.mei.data.model.domain.toMediaMetadata
 import com.ljyh.mei.data.model.podcast.DjProgram
 import com.ljyh.mei.data.model.podcast.DjRadio
 import com.ljyh.mei.data.model.room.PlaybackProgress
+import com.ljyh.mei.di.repository.PlaybackProgressPolicy
 import com.ljyh.mei.playback.queue.ListQueue
 import com.ljyh.mei.playback.queue.QueueSource
 import com.ljyh.mei.ui.component.MeiStatePanel
@@ -248,6 +249,10 @@ fun PodcastDetailScreen(
                                 fallbackSource = QueueSource(
                                     QueueSource.Type.PODCAST, radioId.toString(), title,
                                 ),
+                                // 直接从队列起点续播：切歌回调里那次 seek 常常赶在 prepare 之前，会被丢掉。
+                                startPositionMs = PlaybackProgressPolicy.resumePosition(
+                                    state.progressBySong[songId.toString()]
+                                ) ?: 0L,
                                 buildQueue = { buildQueue() },
                             )
                         },

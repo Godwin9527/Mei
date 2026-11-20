@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
 import androidx.datastore.preferences.core.edit
@@ -239,6 +240,22 @@ class MusicService : MediaLibraryService(),
     /** 上次真正写进库的位置，用来跳过暂停时的重复写入。 */
     private var persistedMediaId: String? = null
     private var persistedPositionMs: Long = -1L
+
+    /**
+     * 刚切到这一首、还没决定要不要跳回上次进度时，先别让采样把记录覆盖掉。
+     * 一次采样就能把「上次听到 20:00」写成「刚开播 1 秒」，之后再也读不出旧位置。
+     */
+    private var resumeGuardId: String? = null
+    private var resumeGuardUntilElapsed = 0L
+
+    /** 这一首是否已经在 STATE_READY 之后补查过一次续播。 */
+    private var resumeCheckedAtReady = false
+
+    /** 已经发出、但还没被播放器落实的续播目标；采样时校验，被丢掉就补一次。 */
+    private var pendingResumeId: String? = null
+    private var pendingResumeMs = 0L
+    private var pendingResumeDeadline = 0L
+    private var pendingResumeAttempts = 0
 
     @Inject
     lateinit var songRepository: SongRepository
@@ -576,7 +593,44 @@ class MusicService : MediaLibraryService(),
         sampledPositionMs = position
         sampledDurationMs = duration
         sampledIsPodcast = isPodcast
-        if (persist && position > 0) persistProgress(id, position, duration, isPodcast)
+        // 每秒校验一次续播是否真的落地，比等 5 秒的落库节拍更早发现问题。
+        if (position > 0) verifyPendingResume(id, position)
+        if (persist && position > 0) {
+            persistProgress(id, position, duration, isPodcast)
+        }
+    }
+
+    /**
+     * 续播 seek 之后校验一次：位置没跟上说明这次 seek 被播放器丢了（刚换队列、还没 prepare
+     * 的时候很常见），补一次。窗口 8 秒、最多两次，之后一律放手，
+     * 免得和用户自己拖动进度条打架。
+     */
+    private fun verifyPendingResume(mediaId: String, positionMs: Long) {
+        val target = pendingResumeMs
+        if (pendingResumeId != mediaId || target <= 0L) return
+        if (SystemClock.elapsedRealtime() > pendingResumeDeadline ||
+            pendingResumeAttempts >= MAX_RESUME_ATTEMPTS
+        ) {
+            clearPendingResume()
+            return
+        }
+        // 位置已经追上目标：这次续播生效了。
+        if (positionMs >= target - RESUME_SLACK_MS) {
+            clearPendingResume()
+            return
+        }
+        if (player.playbackState != Player.STATE_READY) return
+        pendingResumeAttempts++
+        Timber.tag("MusicService").i("resume not applied, retry $mediaId -> $target")
+        player.seekTo(target)
+    }
+
+    private fun clearPendingResume() {
+        if (resumeGuardId != null && resumeGuardId == pendingResumeId) resumeGuardId = null
+        pendingResumeId = null
+        pendingResumeMs = 0L
+        pendingResumeDeadline = 0L
+        pendingResumeAttempts = 0
     }
 
     private fun persistProgress(
@@ -586,6 +640,8 @@ class MusicService : MediaLibraryService(),
         isPodcast: Boolean = false,
     ) {
         if (id.isBlank() || positionMs <= 0) return
+        // 刚切过来、续播还没跑到时，别让采样把旧记录覆盖成「刚开播几秒」。
+        if (id == resumeGuardId && SystemClock.elapsedRealtime() < resumeGuardUntilElapsed) return
         if (isPodcast) {
             updateRecentPodcastProgress(id, positionMs, durationMs)
         }
@@ -608,30 +664,43 @@ class MusicService : MediaLibraryService(),
     private fun resumeFromProgress(mediaId: String) {
         if (mediaId.isBlank()) return
         scope.launch {
-            val position = try {
-                progressRepository.resumePositionOf(mediaId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                null
-            } ?: return@launch
-            if (player.currentMediaItem?.mediaId != mediaId) return@launch
-            // 刚切到这一集时播放器还没解析出时长，退回元数据里的时长，避免把「接近结尾」的
-            // 位置也恢复过去——播客一旦落到末尾，表现就是进度条满、直接没声。
-            // 元数据优先：ExoPlayer 对 VBR 文件的时长估算经常偏小。
-            val metaDuration = (player.currentMediaItem?.localConfiguration?.tag as? MediaMetadata)
-                ?.duration
-                ?: 0L
-            val duration = listOf(metaDuration, player.duration).firstOrNull { it > 0L } ?: 0L
-            val tailGuardMs = if (PodcastTrackRegistry.contains(mediaId)) 90_000L else 3_000L
-            if (duration > 0 && position >= duration - tailGuardMs) return@launch
-            if (kotlin.math.abs(player.currentPosition - position) < 3000) return@launch
-            player.seekTo(position)
-            Toast.makeText(
-                context,
-                "从 ${formatProgressTime(position)} 继续播放",
-                Toast.LENGTH_SHORT,
-            ).show()
+            try {
+                // 恢复队列时位置来自快照，比进度表还准，别再被它拖回几秒。
+                if (restoringQueue) return@launch
+                val position = try {
+                    progressRepository.resumePositionOf(mediaId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                } ?: return@launch
+                if (player.currentMediaItem?.mediaId != mediaId) return@launch
+                // 刚切到这一集时播放器还没解析出时长，退回元数据里的时长，避免把「接近结尾」的
+                // 位置也恢复过去——播客一旦落到末尾，表现就是进度条满、直接没声。
+                // 元数据优先：ExoPlayer 对 VBR 文件的时长估算经常偏小。
+                val metaDuration = (player.currentMediaItem?.localConfiguration?.tag as? MediaMetadata)
+                    ?.duration
+                    ?: 0L
+                val duration = listOf(metaDuration, player.duration).firstOrNull { it > 0L } ?: 0L
+                if (duration > 0 && position >= duration - RESUME_TAIL_GUARD_MS) return@launch
+                if (kotlin.math.abs(player.currentPosition - position) < RESUME_SLACK_MS) return@launch
+                Timber.tag("MusicService").i("resume $mediaId -> $position / $duration")
+                player.seekTo(position)
+                // 记下这次目标位置，采样时发现没落地就补一次。
+                pendingResumeId = mediaId
+                pendingResumeMs = position
+                pendingResumeDeadline = SystemClock.elapsedRealtime() + PENDING_RESUME_WINDOW_MS
+                pendingResumeAttempts = 0
+                Toast.makeText(
+                    context,
+                    "从 ${formatProgressTime(position)} 继续播放",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } finally {
+                // 有 pending 说明这次续播还没确认落地，guard 交给 clearPendingResume 解除；
+                // 其余情况（没有旧进度 / 已经在正确位置 / 太接近结尾）采样可以正常写。
+                if (resumeGuardId == mediaId && pendingResumeId != mediaId) resumeGuardId = null
+            }
         }
     }
 
@@ -1202,8 +1271,17 @@ class MusicService : MediaLibraryService(),
     }
 
     override fun onPlaybackStateChanged(playbackState: Int) {
-        if (playbackState == Player.STATE_READY && player.playerError == null) {
-            consecutiveFailedItems = 0
+        if (playbackState != Player.STATE_READY || player.playerError != null) return
+        consecutiveFailedItems = 0
+        // 切队列那一刻播放器往往还没 prepare，那次 seek 可能被丢掉；
+        // 等真正 READY 后再补查一次，位置还在开头就把它拉到上次听到的地方。
+        if (resumeCheckedAtReady) return
+        resumeCheckedAtReady = true
+        val item = player.currentMediaItem ?: return
+        if (player.currentPosition <= RESUME_SLACK_MS) {
+            resumeFromProgress(item.mediaId)
+        } else {
+            clearPendingResume()
         }
     }
 
@@ -1214,6 +1292,14 @@ class MusicService : MediaLibraryService(),
         }
         // 换到另一首时才处理记忆播放；单曲循环重播不应跳回上一轮的进度。
         if (mediaItem != null && reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
+            // 新一轮曲目：先挡住采样写入，等续播判断完再放开，
+            // 否则「上次听到一半」会被 1 秒的采样覆盖成从头。
+            if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) {
+                resumeGuardId = mediaItem.mediaId
+                resumeGuardUntilElapsed = SystemClock.elapsedRealtime() + RESUME_GUARD_MS
+                resumeCheckedAtReady = false
+                clearPendingResume()
+            }
             sampleProgress(persist = false)
             resumeFromProgress(mediaItem.mediaId)
             recordRecentPodcast(mediaItem)
@@ -1245,5 +1331,18 @@ class MusicService : MediaLibraryService(),
         const val NOTIFICATION_ID = 888
         private const val PLAYLIST_PRELOAD_DURATION_US = 5_000_000L
         private const val MAX_CONSECUTIVE_FAILED_ITEMS = 5
+
+        /** 切歌后这段时间内采样不落库，给续播判断留出窗口。 */
+        private const val RESUME_GUARD_MS = 6_000L
+
+        /** 位置与目标差这么多以内就算「已经在正确位置」，不重复跳。 */
+        private const val RESUME_SLACK_MS = 3_000L
+
+        /** 距结尾不到这么长就不再跳过去，免得一恢复就到底。 */
+        private const val RESUME_TAIL_GUARD_MS = 5_000L
+
+        /** 续播 seek 的落地校验窗口，超时就放手。 */
+        private const val PENDING_RESUME_WINDOW_MS = 8_000L
+        private const val MAX_RESUME_ATTEMPTS = 2
     }
 }

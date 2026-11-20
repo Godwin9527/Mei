@@ -49,7 +49,7 @@
 - **播客播放保护**：`playback/source/PodcastTrackRegistry.kt` 记录播客歌曲 id（**SharedPreferences 持久化**，`AppContext.onCreate` 调 `install`）；`MediaUriProvider` 对命中项固定 `standard` 音质并跳过 LX／解灰兜底（否则会白等 15 秒）。普通歌曲在目标音质取不到地址时，会再降级试一次 `standard`。
 - **应用内更新**：`data/repository/UpdateRepository.kt` + `ui/screen/update/`，入口在 设置 → 检查更新；安装包下载到 `filesDir/updates`，经 `FileProvider`（authority `${applicationId}.fileprovider`）交给系统安装器；需要 `REQUEST_INSTALL_PACKAGES` 权限。Release 资源名由 `tools/ci/prepare-apks.py` 生成，格式 `Mei_<tag>_<abi>.apk`，更新逻辑按 ABI 匹配。
 - **歌词页控制栏**：`PreferenceKeys.LyricsControlsAutoHideKey`（默认 false）控制是否 3 秒自动收起；点击歌词区域不再切换控制栏，只有上下滑动歌词才切换显隐。
-- **发布**：`versionName` 与 tag 保持一致（当前 2.3.5 / versionCode 10）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
+- **发布**：`versionName` 与 tag 保持一致（当前 2.3.6 / versionCode 11）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
 
 ## v2.3.0 起：播客体验与播放记忆
 
@@ -124,3 +124,13 @@
 - **电台页加载抗限流**：`PodcastViewModel` 分页 50 → 500（`MAX_PAGES = 3`），161 集一次到位；网络类错误退避重试 2 次（800ms / 2s）；错误文案按码区分（405/429/460/503 → 「查询过于频繁，请等几十秒再试」，301/302 → 登录失效）。命中频控进入 30 秒冷却（`retryInSeconds`），冷却期间点重试不发请求，底部提示倒计时；失败时保留已加载列表，不用整页错误面板顶掉。`PodcastRepository.programs` 的异常文案同步改造。
 
 **已知限制**：升级前听完的集数，记录已被旧代码删除，升级后这些集会显示「未播放」，要等下次听到 15 秒以上才有记录；旧数据无法追溯。小时级节目在列表里仍按「分钟:秒」显示（如 `125:03`），与 `TimeUtils.formatDuration` 的既有约定一致。
+
+## v2.3.6 起：续播位置随队列下发，不再靠切歌回调补 seek
+
+2.3.5 之后「听一半 → 去听别的歌 → 回来点卡片播放键」仍然从头播。根因不是一个点，而是三个环节叠在一起：
+
+- **起点随队列下发**：`ListQueue.startingAt(trackId, positionMs)` 与 `ListQueue(position = ...)` 现在承载续播位置，`PlaybackQueueManager.playQueue` 把它交给 `player.setMediaItems(items, index, startPosition)`，播放器第一帧就落在上次听到的位置。原来全靠 `onMediaItemTransition` 里再 `player.seekTo()`，而那个时机队列刚换、播放器还没 prepare，seek 会被丢掉。
+- **切歌后 6 秒内不许采样覆盖旧记录**：`MusicService.resumeGuard`（`resumeGuardId` / `resumeGuardUntilElapsed`）在 `onMediaItemTransition`（非 SEEK 原因）立即生效。一次 1 秒的采样就能把「上次听到 20:00」写成「刚开播 1 秒」，之后 `resumePositionOf` 读到只有几百毫秒，按 `MIN_RESUME_MS` 直接返回 null——这才是「记忆明明有却从头播」最隐蔽的一环。
+- **READY 后补查 + 落地校验**：`onPlaybackStateChanged(STATE_READY)` 每首补查一次续播（`resumeCheckedAtReady`）；`verifyPendingResume` 在每秒采样里比对 `pendingResumeMs`，位置没跟上说明 seek 被丢了，补最多 2 次、窗口 8 秒，之后放手不再干扰用户手动拖动。三个环节合起来，即使某一次 seek 没生效也会被纠回来。
+- **入口都带上位置**：卡片播放键（`PodcastPlaybackViewModel.buildQueue` 读 `PlaybackProgressRepository.progressOf`）、卡片回落单集（`RecentPodcastEpisode.asSingleQueue(resumeMs)`）、电台页点某一集（`PlayerConnection.onTrackClicked(..., startPositionMs)`）都显式传起点。判断门槛统一走 `PlaybackProgressPolicy.resumePosition(saved)`（听完 / 不足 15 秒返回 null），避免界面与播放服务各写一套。
+- **尾部长度的判断收敛**：`resumeFromProgress` 里「距结尾 90 秒就不续播」的特例去掉，统一 5 秒。播客听到 38:30 也该接着听，「听完」已经由 `completed` 负责判定，两者不该互相打架。

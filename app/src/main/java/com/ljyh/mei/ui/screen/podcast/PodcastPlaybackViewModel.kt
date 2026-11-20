@@ -9,11 +9,13 @@ import com.ljyh.mei.data.model.podcast.DjProgram
 import com.ljyh.mei.data.model.room.PlaybackProgress
 import com.ljyh.mei.data.network.Resource
 import com.ljyh.mei.data.repository.PodcastRepository
+import com.ljyh.mei.di.repository.PlaybackProgressPolicy
 import com.ljyh.mei.di.repository.PlaybackProgressRepository
 import com.ljyh.mei.playback.queue.ListQueue
 import com.ljyh.mei.playback.queue.QueueSource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -31,7 +33,7 @@ import kotlinx.coroutines.flow.stateIn
 @HiltViewModel
 class PodcastPlaybackViewModel @Inject constructor(
     private val repository: PodcastRepository,
-    progressRepository: PlaybackProgressRepository,
+    private val progressRepository: PlaybackProgressRepository,
 ) : ViewModel() {
 
     /** 正在准备中的单集 songId，界面据此在播放键上转圈。 */
@@ -44,12 +46,16 @@ class PodcastPlaybackViewModel @Inject constructor(
 
     /**
      * 拉整张节目表并构造以该集为起点的队列；拉不到（网络失败 / 节目已下架）返回 null。
+     *
+     * 起点位置直接取本地进度表并写进队列：交给 setMediaItems 的 startPosition，
+     * 播放器第一帧就落在上次听到的位置，不依赖切歌回调里那次 seek。
      */
     suspend fun buildQueue(episode: RecentPodcastEpisode): ListQueue? {
         val songId = episode.songId.toString()
         if (_preparingId.value != null) return null
         _preparingId.value = songId
         return try {
+            val startMs = resumePositionOf(songId).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
             val programs = loadPrograms(episode.radioId)
             val pairs = programs.mapNotNull { program ->
                 program.toMediaMetadata()?.let { meta -> meta.id.toString() to meta.toMediaItem() }
@@ -60,11 +66,24 @@ class PodcastPlaybackViewModel @Inject constructor(
                 id = "podcast_${episode.radioId}",
                 title = title,
                 items = pairs,
+                position = startMs,
                 source = QueueSource(QueueSource.Type.PODCAST, episode.radioId.toString(), title),
-            ).startingAt(songId)
+            ).startingAt(songId, startMs)
         } finally {
             _preparingId.value = null
         }
+    }
+
+    /** 这一集该从哪继续；听完的、听太短的返回 0。 */
+    suspend fun resumePositionOf(songId: String): Long {
+        val saved = try {
+            progressRepository.progressOf(songId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        return PlaybackProgressPolicy.resumePosition(saved) ?: 0L
     }
 
     private suspend fun loadPrograms(radioId: Long): List<DjProgram> {

@@ -105,10 +105,16 @@ class PlayerConnection(
     fun isPlaying(id: String): Boolean {
         return mediaMetadata.value?.id.toString() == id && isPlaying.value
     }
-    fun onTrackClicked(trackId: String, buildQueue: () -> ListQueue?, fallbackSource: QueueSource? = null) {
+    fun onTrackClicked(
+        trackId: String,
+        buildQueue: () -> ListQueue?,
+        fallbackSource: QueueSource? = null,
+        startPositionMs: Long = 0L,
+    ) {
         // Rebuild the list selected by the user. The existing queue may contain the same song
         // from another source or have a different shuffle order.
-        val selectedQueue = buildQueue()?.startingAt(trackId)
+        val startPosition = startPositionMs.coerceAtLeast(0L).toInt()
+        val selectedQueue = buildQueue()?.startingAt(trackId, startPosition)
         if (selectedQueue != null) {
             playQueue(selectedQueue, startInShuffleMode = false)
             return
@@ -119,6 +125,7 @@ class PlayerConnection(
             ListQueue(
                 id = "track_$trackId",
                 items = listOf(trackId to createPlaceholder(trackId)),
+                position = startPosition,
                 source = fallbackSource ?: QueueSource(QueueSource.Type.OTHER, title = "单曲播放"),
             ),
             startInShuffleMode = false,

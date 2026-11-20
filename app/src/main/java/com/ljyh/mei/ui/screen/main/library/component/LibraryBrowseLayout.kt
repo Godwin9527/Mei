@@ -32,6 +32,7 @@ import com.ljyh.mei.data.model.domain.MediaMetadata
 import com.ljyh.mei.data.model.domain.RecentPodcastCodec
 import com.ljyh.mei.data.model.domain.RecentPodcastEpisode
 import com.ljyh.mei.data.model.domain.toMediaItem
+import com.ljyh.mei.di.repository.PlaybackProgressPolicy
 import com.ljyh.mei.playback.queue.ListQueue
 import com.ljyh.mei.playback.queue.QueueSource
 import com.ljyh.mei.ui.component.MeiSectionTitle
@@ -597,10 +598,11 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobilePodcastSection(
         val progressBySong by playback.progressBySong.collectAsStateWithLifecycle()
         val preparingId by playback.preparingId.collectAsStateWithLifecycle()
         val songId = recent?.songId?.toString()
+        val savedProgress = songId?.let { progressBySong[it] }
         val playing = preparingId != null && preparingId == songId
         LibraryPodcastCard(
             recent = recent,
-            progress = songId?.let { progressBySong[it] },
+            progress = savedProgress,
             playing = playing,
             height = cardHeight,
             modifier = Modifier.padding(rowPadding),
@@ -613,6 +615,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobilePodcastSection(
             onPlay = {
                 val episode = recent
                 if (episode != null && !playing) {
+                    // 回落单集时也要从上次听到的位置开始，否则「按 ▶ 从头播」还是会发生。
+                    val resumeMs = PlaybackProgressPolicy.resumePosition(savedProgress) ?: 0L
                     scope.launch {
                         // 用整张节目表入队并定位到这一集，才能继续上一集/下一集；
                         // 拉不到时才回落到「只播这一集」，并明确告诉用户原因。
@@ -621,7 +625,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobilePodcastSection(
                         if (queue != null) {
                             connection.playQueue(queue, startInShuffleMode = false)
                         } else {
-                            connection.playQueue(episode.asSingleQueue(), startInShuffleMode = false)
+                            connection.playQueue(episode.asSingleQueue(resumeMs), startInShuffleMode = false)
                             Toast.makeText(context, "节目表加载失败，先播放这一集", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -632,8 +636,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.mobilePodcastSection(
     }
 }
 
-/** 进度表拉不到时的兜底：只播这一集。 */
-private fun RecentPodcastEpisode.asSingleQueue(): ListQueue {
+/** 进度表拉不到时的兜底：只播这一集，但仍然从上次听到的位置开始。 */
+private fun RecentPodcastEpisode.asSingleQueue(resumeMs: Long): ListQueue {
     val meta = MediaMetadata(
         id = songId,
         title = episodeTitle,
@@ -649,6 +653,7 @@ private fun RecentPodcastEpisode.asSingleQueue(): ListQueue {
         title = radioName.ifBlank { "播客" },
         items = listOf(songId.toString() to meta.toMediaItem()),
         startIndex = 0,
+        position = resumeMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
         source = QueueSource(QueueSource.Type.PODCAST, radioId.toString(), radioName),
     )
 }
