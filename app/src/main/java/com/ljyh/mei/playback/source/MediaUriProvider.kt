@@ -63,18 +63,20 @@ class MediaUriProvider @Inject constructor(
         // Podcast programmes only exist as 192 kbps mp3 and must never fall back to other
         // providers (that would waste 15s and then still fail).
         val isPodcast = PodcastTrackRegistry.contains(mediaId)
-        val baseKey = "$mediaId|${quality.lowercase()}|full-v1"
+        // 请求用的 key 只用于 URL 缓存的查找；写入播放缓存时必须换成「实际拿到的音质」，
+        // 否则高音质降级到 standard 时两份不同文件会共用同一条缓存。
+        val requestKey = PlaybackCacheKey.of(mediaId, quality)
         val localPath = songRepository.getSong(mediaId).firstOrNull()?.path
             ?: songRepository.getSong("local_$mediaId").firstOrNull()?.path
         if (localPath != null && (localPath.startsWith("content://") || File(localPath).exists())) {
             if (recordPlayback) _sourceInfo.update { it + (mediaId to PlaybackSourceInfo("本地", null)) }
-            return ResolvedMediaUri(if (localPath.startsWith("content://")) Uri.parse(localPath) else Uri.fromFile(File(localPath)), baseKey)
+            return ResolvedMediaUri(if (localPath.startsWith("content://")) Uri.parse(localPath) else Uri.fromFile(File(localPath)), requestKey)
         }
         val mode = context.dataStore.data.first().audioSourceMode()
         // Only LX reads script state; changing mode cannot reuse another resolver's URL.
         val scripts = if (mode == AudioSourceMode.Lx) scriptStore.snapshot() else emptyList()
         val revision = scripts.joinToString { "${it.id}:${it.enabled}" }.hashCode()
-        val lookupKey = "$baseKey|${mode.name}|$revision"
+        val lookupKey = "$requestKey|${mode.name}|$revision"
         val recoveryKey = mode.recoveryKey(mediaId)
         fun cached(): ResolvedMediaUri? = urlCache[lookupKey]?.takeIf { it.expiresAtMs > System.currentTimeMillis() }?.let {
             selected(mediaId, it, recordPlayback)
@@ -99,7 +101,14 @@ class MediaUriProvider @Inject constructor(
                         if (url != null && data.freeTrialInfo == null) {
                             val duration = data.time?.takeIf { it > 0 } ?: probe.durationMs(url)
                             if (duration != null && !PreviewPolicy.isPreview(duration)) {
-                                val resolved = CachedUrl(url, System.currentTimeMillis() + 10 * 60_000, baseKey,
+                                // 以接口回报的 level 为准：请求 exhigh 被降级成 standard 时，
+                                // 内容其实是 standard 的文件，key 必须跟着走。
+                                val actualLevel = data.level
+                                    ?.lowercase()
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: level
+                                val resolved = CachedUrl(url, System.currentTimeMillis() + 10 * 60_000,
+                                    PlaybackCacheKey.of(mediaId, actualLevel),
                                     "netease", PlaybackSourceInfo("网易云", data.level), recoveryKey)
                                 urlCache[lookupKey] = resolved
                                 return@withLock selected(mediaId, resolved, recordPlayback)
@@ -115,7 +124,7 @@ class MediaUriProvider @Inject constructor(
                         lxSources.resolve(target, quality, excluded)?.let { audio ->
                             val name = scripts.firstOrNull { it.id == audio.scriptId }?.name ?: "自定义音源"
                             CachedUrl(audio.url, System.currentTimeMillis() + 2 * 60_000,
-                                "$baseKey|lx:${audio.identity}", audio.identity,
+                                PlaybackCacheKey.withIdentity(requestKey, "lx:${audio.identity}"), audio.identity,
                                 PlaybackSourceInfo("$name · ${sourceDisplayName(audio.source)}", audio.quality), recoveryKey)
                         }
                     },
@@ -132,7 +141,7 @@ class MediaUriProvider @Inject constructor(
                         }?.let { audio ->
                             val identity = "legacy|${audio.track.id.source}|${audio.track.id.value}"
                             CachedUrl(audio.url, System.currentTimeMillis() + 2 * 60_000,
-                                "$baseKey|$identity", identity,
+                                PlaybackCacheKey.withIdentity(requestKey, identity), identity,
                                 PlaybackSourceInfo("解灰 · ${sourceDisplayName(audio.track.id.source)}", null), recoveryKey)
                         }
                     },

@@ -22,6 +22,8 @@ import com.ljyh.mei.data.network.Resource
 import com.ljyh.mei.data.repository.DynamicCoverRepository
 import com.ljyh.mei.data.repository.LikedSongsRepository
 import com.ljyh.mei.data.repository.UserRepository
+import com.ljyh.mei.playback.source.CacheManager
+import com.ljyh.mei.playback.source.PodcastTrackRegistry
 import com.ljyh.mei.utils.image.ArtworkRequestInterceptor
 import com.ljyh.mei.utils.power.canUseBatteryIntensiveFeatures
 import com.ljyh.mei.utils.preferences.dataStore
@@ -49,6 +51,8 @@ class AppContext : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // 恢复播客登记表：冷启动后仍要能认出历史播客，否则会被当成普通歌曲请求高音质。
+        PodcastTrackRegistry.install(this)
         registerActivityLifecycleCallbacks(com.ljyh.mei.playback.usb.UsbAppVisibility)
         startupScope.launch {
             dataStore.data
@@ -81,6 +85,18 @@ class AppContext : Application(), SingletonImageLoader.Factory {
                 throw cancelled
             } catch (_: Exception) {
                 // Motion artwork is optional; startup must remain usable offline.
+            }
+        }
+        startupScope.launch {
+            // v2 的缓存 key 记录的是实际音质，旧版本播客条目可能混过两份文件，直接丢掉。
+            runCatching {
+                val podcastIds = PodcastTrackRegistry.snapshot()
+                if (podcastIds.isNotEmpty()) {
+                    CacheManager.purgeLegacyEntries(
+                        CacheManager.getSimpleCache(this@AppContext),
+                        podcastIds,
+                    )
+                }
             }
         }
     }

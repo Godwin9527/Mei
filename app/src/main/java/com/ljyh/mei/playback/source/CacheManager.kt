@@ -109,6 +109,36 @@ object CacheManager {
     }
 
     /**
+     * 找出该 id 已完整落盘的缓存 key。
+     *
+     * 音质可能被降级，实际写入的 key 未必等于按当前设置算出来的那个，所以按前缀枚举而不是
+     * 拼一个固定的 key——原来拼固定 key 的做法永远命中不了，等于这个短路从未生效。
+     */
+    @OptIn(UnstableApi::class)
+    fun findFullyCachedKey(cache: Cache, mediaId: String): String? {
+        if (mediaId.isBlank()) return null
+        val prefix = "$mediaId|"
+        for (key in cache.keys.toList()) {
+            if (!key.startsWith(prefix) || !PlaybackCacheKey.isCurrent(key)) continue
+            if (isContentFullyCached(cache, key)) return key
+        }
+        return null
+    }
+
+    /**
+     * 丢弃指定曲目的旧版本缓存（v1 的 key 只记了请求音质，字节来源不可靠）。
+     * 只处理传入的 id，普通歌曲的缓存不受影响。
+     */
+    @OptIn(UnstableApi::class)
+    fun purgeLegacyEntries(cache: Cache, mediaIds: Collection<String>) {
+        if (mediaIds.isEmpty()) return
+        val prefixes = mediaIds.mapTo(HashSet()) { "$it|" }
+        cache.keys.toList()
+            .filter { key -> PlaybackCacheKey.isLegacy(key) && prefixes.any(key::startsWith) }
+            .forEach { key -> runCatching { cache.removeResource(key) } }
+    }
+
+    /**
      * 释放缓存资源。应该在应用进程结束时调用。
      */
     @OptIn(UnstableApi::class)

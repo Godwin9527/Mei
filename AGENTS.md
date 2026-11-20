@@ -46,10 +46,10 @@
 ## 本 fork 的定制（v2.2.0 起）
 
 - **播客**：`ui/screen/podcast/`（列表、详情、`PodcastViewModel`）；网络层 `WeApiService.getSubscribedRadios/getRadioPrograms`；模型 `data/model/podcast/PodcastModels.kt`；映射 `data/model/domain/PodcastMapper.kt`。播客节目的可播 id 是 `mainSong.id`，`program.id` 只能用于节目页和分享链接。
-- **播客播放保护**：`playback/source/PodcastTrackRegistry.kt` 记录播客歌曲 id；`MediaUriProvider` 对命中项固定 `standard` 音质并跳过 LX／解灰兜底（否则会白等 15 秒）。普通歌曲在目标音质取不到地址时，会再降级试一次 `standard`。
+- **播客播放保护**：`playback/source/PodcastTrackRegistry.kt` 记录播客歌曲 id（**SharedPreferences 持久化**，`AppContext.onCreate` 调 `install`）；`MediaUriProvider` 对命中项固定 `standard` 音质并跳过 LX／解灰兜底（否则会白等 15 秒）。普通歌曲在目标音质取不到地址时，会再降级试一次 `standard`。
 - **应用内更新**：`data/repository/UpdateRepository.kt` + `ui/screen/update/`，入口在 设置 → 检查更新；安装包下载到 `filesDir/updates`，经 `FileProvider`（authority `${applicationId}.fileprovider`）交给系统安装器；需要 `REQUEST_INSTALL_PACKAGES` 权限。Release 资源名由 `tools/ci/prepare-apks.py` 生成，格式 `Mei_<tag>_<abi>.apk`，更新逻辑按 ABI 匹配。
 - **歌词页控制栏**：`PreferenceKeys.LyricsControlsAutoHideKey`（默认 false）控制是否 3 秒自动收起；点击歌词区域不再切换控制栏，只有上下滑动歌词才切换显隐。
-- **发布**：`versionName` 与 tag 保持一致（当前 2.3.1 / versionCode 6）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
+- **发布**：`versionName` 与 tag 保持一致（当前 2.3.3 / versionCode 8）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
 
 ## v2.3.0 起：播客体验与播放记忆
 
@@ -81,3 +81,22 @@
 - **队列里播客项空白**（只有一个时长）：根因是 `PlaybackQueueSnapshot` 只存 `currentSong`，其余靠 `createPlaceholder`，再由 `PlaybackQueueManager.loadSongDetails` 走 `/song/detail` 补全；播客的 `mainSong.id` 在那里只返回时长，标题和封面是空的，于是替换成了空行。现在快照新增 `podcasts: List<PodcastQueueSong>?`（仅播客队列，约 25KB/161 集），恢复时优先用它 `toMediaMetadata().toMediaItem()` 重建，同时会 `PodcastTrackRegistry.mark`，不会白等 LX 兜底。
 - **防御**：`loadMetadataAtIndices` 过滤掉 `title` 为空的返回，不再用残缺数据覆盖占位符；`savePlaybackQueue` 一次取 `player.mediaItems`，并对 `currentIndex` / `currentSong` 做一致性校验，避免 `ids` 与 `entries` 长度不一致导致 decode 校验失败、整份快照被丢弃。
 - 旧快照（无 `podcasts` 字段）升级后第一次仍是空行，播放一次播客让新快照写入（10 秒内）即可。
+
+## v2.3.3 起：播放缓存 key 与播客身份修复
+
+用户反馈「播客内容比网易云官方 App 跑得快，进度条满了但还有一大段没播」，以及「-30 秒实际跳了几分钟」。根因不是 MP3 seek 精度，而是**缓存里混了两份文件**：
+
+- **key 记的是请求音质，不是实际音质**：`MediaUriProvider` 原来的 `baseKey = "$mediaId|${quality}|full-v1"`，`quality` 取用户设置（默认 exhigh），而播客只走 `@PODCAST_LEVEL = "standard"`；普通歌曲在目标音质失败时也会降级到 standard。于是同一个 key 下可能先后写入码率不同的两个文件（时长相同、字节数不同），播放器按 A 文件的字节偏移去读 B 文件，时间轴和内容就此错开，误差随位置线性增长。
+- **播客身份只在内存里**：`PodcastTrackRegistry` 原先纯内存，冷启动 / 从「最近播放」进 / 通知栏恢复时为空，同一集会被当普通歌曲先请求 exhigh，是上一条的主要触发路径。
+- **「整集已缓存」短路从未生效**：`MusicService.createDataSourceFactory` 拼的 key 与实际写入的不一致，等于每次都重新解析地址。
+
+改动：
+
+- 新增 `playback/source/PlaybackCacheKey.kt`：统一 key 形状 `<mediaId>|<实际音质>|full-v2`（LX/解灰再追加 `|lx:<identity>`）。`VERSION` 升到 `full-v2`，因此 v1 条目自动失效；`isCurrent` 只认 v2，`isLegacy` 用于清理。
+- `MediaUriProvider`：`requestKey` 只用于 URL 缓存查找；写入播放缓存时改用接口回报的 `data.level`（降级就记 standard），`RequestKey` 与实际内容严格对应。
+- `PodcastTrackRegistry` 改为 SharedPreferences 持久化，`AppContext.onCreate` 调 `install(this)`；`AppContext` 另起一个 IO 协程用 `CacheManager.purgeLegacyEntries` 丢掉历史播客的 v1 条目。
+- `CacheManager.findFullyCachedKey`：按 `"$mediaId|"` 前缀枚举缓存索引找完整条目，替代原来拼固定 key 的做法（后者永远不命中）。
+- `StorageCacheManager.isMusicKey` 复用 `PlaybackCacheKey.isPlaybackKey`，v1/v2 都算音乐缓存，「清理音乐缓存」能一次清干净。
+- `MusicService.resumeFromProgress`：播放器还没解析出时长时退回 `MediaMetadata.duration` 兜底；播客距结尾 90 秒内不自动续播（普通歌曲仍是 3 秒），避免「一进来就快没了」。
+
+**升级代价**：v1 缓存不再命中，首次播放会重新下载。旧条目不会被复用，由 LRU 淘汰或用户在 设置 → 缓存 → 音乐缓存 手动清理。

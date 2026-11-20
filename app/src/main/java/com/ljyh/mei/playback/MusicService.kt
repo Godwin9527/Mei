@@ -108,10 +108,11 @@ import com.ljyh.mei.playback.sleep.SleepDetectionController
 import com.ljyh.mei.playback.sleep.SleepTimer
 import com.ljyh.mei.playback.source.CacheManager
 import com.ljyh.mei.playback.source.CacheManager.getCacheDataSourceFactory
-import com.ljyh.mei.playback.source.CacheManager.isContentFullyCached
+import com.ljyh.mei.playback.source.CacheManager.findFullyCachedKey
 import com.ljyh.mei.playback.source.MediaUriProvider
 import com.ljyh.mei.playback.source.MusicLoadErrorHandlingPolicy
 import com.ljyh.mei.playback.source.PlaybackSourceInfo
+import com.ljyh.mei.playback.source.PodcastTrackRegistry
 import com.ljyh.mei.playback.source.SourceNotFoundException
 import com.ljyh.mei.playback.transition.SmartTransitionController
 import com.ljyh.mei.playback.transition.TransitionAudioProbe
@@ -585,8 +586,14 @@ class MusicService : MediaLibraryService(),
                 null
             } ?: return@launch
             if (player.currentMediaItem?.mediaId != mediaId) return@launch
-            val duration = player.duration.takeIf { it > 0 } ?: 0L
-            if (duration > 0 && position >= duration) return@launch
+            // 刚切到这一集时播放器还没解析出时长，退回元数据里的时长，避免把「接近结尾」的
+            // 位置也恢复过去——播客一旦落到末尾，表现就是进度条满、直接没声。
+            val metaDuration = (player.currentMediaItem?.localConfiguration?.tag as? MediaMetadata)
+                ?.duration
+                ?: 0L
+            val duration = player.duration.takeIf { it > 0 } ?: metaDuration
+            val tailGuardMs = if (PodcastTrackRegistry.contains(mediaId)) 90_000L else 3_000L
+            if (duration > 0 && position >= duration - tailGuardMs) return@launch
             if (kotlin.math.abs(player.currentPosition - position) < 3000) return@launch
             player.seekTo(position)
             Toast.makeText(
@@ -947,13 +954,14 @@ class MusicService : MediaLibraryService(),
 
         return ResolvingDataSource.Factory(getCacheDataSourceFactory(context)) { dataSpec ->
             runBlocking {
-                val quality = context.dataStore[MusicQualityKey]?.lowercase(getDefault()) ?: MusicQuality.EXHIGH.text
                 val mediaId = dataSpec.key ?: throw SourceNotFoundException("Missing media cache key")
-                val cacheKey = "$mediaId|$quality|full-v1"
-                if (isContentFullyCached(simpleCache, cacheKey)) {
-                    Timber.tag("ResolvingDataSource").d("Fully cached on disk: $cacheKey")
-                    return@runBlocking dataSpec.buildUpon().setKey(cacheKey).build()
+                // 整集已在磁盘上时直接用已存在的 key，不再发解析请求（离线也能播）。
+                val cachedKey = findFullyCachedKey(simpleCache, mediaId)
+                if (cachedKey != null) {
+                    Timber.tag("ResolvingDataSource").d("Fully cached on disk: $cachedKey")
+                    return@runBlocking dataSpec.buildUpon().setKey(cachedKey).build()
                 }
+                val quality = context.dataStore[MusicQualityKey]?.lowercase(getDefault()) ?: MusicQuality.EXHIGH.text
                 val resolved = mediaUriProvider.resolveMedia(mediaId, quality)
                 dataSpec.buildUpon().setUri(resolved.uri).setKey(resolved.cacheKey).build()
             }
