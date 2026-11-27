@@ -357,7 +357,9 @@ fun LibraryBrowseLayout(
         MeiHazeTopBar(state = source, title = "音乐库", progress = progress,
                 actions = {
                     if (!tablet) {
-                        IconButton(onClick = { Screen.LibraryLayout.navigate(LocalNavController.current) }) {
+                        // 在 composable 作用域先取出来，onClick 里不能再读 CompositionLocal。
+                        val nav = LocalNavController.current
+                        IconButton(onClick = { Screen.LibraryLayout.navigate(nav) }) {
                             Icon(Icons.Rounded.Tune, contentDescription = "音乐库首页布局")
                         }
                     }
