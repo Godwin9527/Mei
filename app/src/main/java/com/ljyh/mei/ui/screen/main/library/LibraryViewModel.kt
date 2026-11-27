@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.ljyh.mei.data.model.response.AlbumPhoto
 import com.ljyh.mei.data.model.domain.UserAccountSummary
 import com.ljyh.mei.data.model.domain.MediaMetadata
+import com.ljyh.mei.data.model.domain.toMediaItem
 import com.ljyh.mei.data.model.response.UserAlbumList
 import com.ljyh.mei.data.model.response.UserDetail
 import com.ljyh.mei.data.model.response.UserVipInfo
@@ -49,15 +50,29 @@ class LibraryViewModel internal constructor(
     private val source: LibraryDataSource,
     private val localPlaylistRepository: LocalPlaylistRepository,
     scopeOverride: CoroutineScope? = null,
+    private val queueResumeRepository: com.ljyh.mei.di.repository.QueueResumeRepository? = null,
 ) : ViewModel() {
     @Inject constructor(
         @ApplicationContext context: Context,
         repository: UserRepository,
         playlistRepository: PlaylistRepository,
         localPlaylistRepository: LocalPlaylistRepository,
-    ) : this(context, RepositoryLibraryDataSource(repository, playlistRepository), localPlaylistRepository)
+        queueResumeRepository: com.ljyh.mei.di.repository.QueueResumeRepository,
+    ) : this(context, RepositoryLibraryDataSource(repository, playlistRepository), localPlaylistRepository, null, queueResumeRepository)
 
     private val requestScope = scopeOverride ?: viewModelScope
+
+    /**
+     * 各集合「上次播到哪一条」，首页卡片副标题据此写「第 8 首」。
+     * 没有注入仓库（测试替身）时给一份空表，卡片退回只显示曲目数。
+     */
+    val resumeByKey: StateFlow<Map<String, com.ljyh.mei.data.model.room.QueueResume>> =
+        (queueResumeRepository?.observeAll() ?: kotlinx.coroutines.flow.flowOf(emptyMap()))
+            .stateIn(
+                scope = requestScope,
+                started = SharingStarted.WhileSubscribed(5_000L),
+                initialValue = emptyMap(),
+            )
     private val _signedIn = MutableStateFlow(false)
     val signedIn: StateFlow<Boolean> = _signedIn
     private val _isRefreshing = MutableStateFlow(false)
@@ -398,13 +413,61 @@ class LibraryViewModel internal constructor(
         return likedArtworkJob
     }
 
-    suspend fun preparePlaylistPlayback(id: String): Resource<ListQueue> =
+    /**
+     * 把歌单排成队列。默认按上次播到的那一首定位，[fromMemory] 传 false 时从头播
+     * （长按播放键走这条）。
+     */
+    suspend fun preparePlaylistPlayback(id: String, fromMemory: Boolean = true): Resource<ListQueue> =
         when (val result = source.getPlaylistDetail(id)) {
             is Resource.Success -> withContext(Dispatchers.Default) {
-                buildLibraryPlaylistQueue(result.data)?.let { Resource.Success(it) }
+                val resume = if (fromMemory) resumeOf("playlist:$id") else null
+                buildLibraryPlaylistQueue(result.data, resume)?.let { Resource.Success(it) }
                     ?: Resource.Error("歌单中暂无可播放的歌曲")
             }
             is Resource.Error -> Resource.Error("暂时无法播放，请稍后重试")
+            Resource.Loading -> Resource.Loading
+        }
+
+    /** 读队列记忆；表不可用或读取失败时当作「没有记录」，不影响正常播放。 */
+    private suspend fun resumeOf(queueKey: String): com.ljyh.mei.data.model.room.QueueResume? =
+        try {
+            queueResumeRepository?.resumeOf(queueKey)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+
+    /**
+     * 收藏专辑的播放队列。首页专辑卡片没有曲目，点播放键时才拉一次详情。
+     * 与歌单一致：按上次那一首定位，整条队列不做单曲秒数续播。
+     */
+    suspend fun prepareAlbumPlayback(id: Long, fromMemory: Boolean = true): Resource<ListQueue> =
+        when (val result = source.getAlbumDetail(id.toString())) {
+            is Resource.Success -> withContext(Dispatchers.Default) {
+                val album = result.data.album
+                val songs = result.data.songs
+                if (songs.isEmpty()) {
+                    Resource.Error("专辑中暂无可播放的歌曲")
+                } else {
+                    val queue = ListQueue(
+                        id = "album_${album.id}",
+                        title = album.name,
+                        source = com.ljyh.mei.playback.queue.QueueSource(
+                            com.ljyh.mei.playback.queue.QueueSource.Type.ALBUM,
+                            album.id.toString(),
+                            album.name,
+                        ),
+                        items = songs.map { song -> song.id.toString() to song.toMediaItem() },
+                        suppressTrackResume = true,
+                    )
+                    val mediaId = if (fromMemory) resumeOf("album:$id")?.mediaId else null
+                    Resource.Success(
+                        mediaId?.let { queue.startingAt(it) } ?: queue
+                    )
+                }
+            }
+            is Resource.Error -> Resource.Error("专辑暂时无法播放，请稍后重试")
             Resource.Loading -> Resource.Loading
         }
 

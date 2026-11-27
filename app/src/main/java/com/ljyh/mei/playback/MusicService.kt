@@ -230,6 +230,12 @@ class MusicService : MediaLibraryService(),
     @Inject
     lateinit var progressRepository: com.ljyh.mei.di.repository.PlaybackProgressRepository
 
+    @Inject
+    lateinit var queueResumeRepository: com.ljyh.mei.di.repository.QueueResumeRepository
+
+    @Inject
+    lateinit var playModeStore: PlayModeMemoryStore
+
     // 每秒采样一次当前曲目位置；切歌时把上一曲的最后位置落库，避免丢掉最后几秒。
     private var progressSampleJob: Job? = null
     private var sampledMediaId: String? = null
@@ -325,17 +331,40 @@ class MusicService : MediaLibraryService(),
                         }
                     }
                     override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+                        // 当前队列的来源，决定这条模式记到哪个歌单名下。
+                        val queueKey = com.ljyh.mei.di.repository.queueResumeKeyOf(
+                            player.currentMediaItem?.queueSource
+                        )
+                        val repeat = player.repeatMode
                         scope.launch {
-                            context.dataStore.edit { preferences ->
-                                preferences[IsShuffleModeKey] = shuffleModeEnabled
+                            try {
+                                context.dataStore.edit { preferences ->
+                                    preferences[IsShuffleModeKey] = shuffleModeEnabled
+                                }
+                                playModeStore.record(queueKey, shuffleModeEnabled, repeat)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Timber.tag("MusicService").e(e, "save shuffle mode failed")
                             }
                         }
                     }
 
                     override fun onRepeatModeChanged(repeatMode: Int) {
+                        val queueKey = com.ljyh.mei.di.repository.queueResumeKeyOf(
+                            player.currentMediaItem?.queueSource
+                        )
+                        val shuffle = player.shuffleModeEnabled
                         scope.launch {
-                            context.dataStore.edit { preferences ->
-                                preferences[RepeatModeKey] = repeatMode
+                            try {
+                                context.dataStore.edit { preferences ->
+                                    preferences[RepeatModeKey] = repeatMode
+                                }
+                                playModeStore.record(queueKey, shuffle, repeatMode)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Timber.tag("MusicService").e(e, "save repeat mode failed")
                             }
                         }
                     }
@@ -484,8 +513,11 @@ class MusicService : MediaLibraryService(),
         }
 
 
+        // 播放模式按来源记忆，入队时要同步读，先把缓存填上。
+        scope.launch { playModeStore.load() }
+
         // The manager must exist before restored items publish timeline events.
-        queueManager = PlaybackQueueManager(player, apiService, weApiService, scope)
+        queueManager = PlaybackQueueManager(player, apiService, weApiService, scope, playModeStore)
         restorePlayerState()
         scope.launch {
             while (isActive) {
@@ -700,6 +732,29 @@ class MusicService : MediaLibraryService(),
                 // 有 pending 说明这次续播还没确认落地，guard 交给 clearPendingResume 解除；
                 // 其余情况（没有旧进度 / 已经在正确位置 / 太接近结尾）采样可以正常写。
                 if (resumeGuardId == mediaId && pendingResumeId != mediaId) resumeGuardId = null
+            }
+        }
+    }
+
+    /**
+     * 记下这个歌单 / 专辑 / 电台播到了队列里的哪一条。
+     *
+     * 卡片上的「第 8 首」和下次点播放键的落点都靠它。ExoPlayer 的随机模式只影响
+     * next/previous 的遍历顺序，`currentMediaItemIndex` 仍是时间线上的原始位置，
+     * 因此这里存的序号就是歌单里的序号。
+     */
+    private fun recordQueueResume(item: MediaItem) {
+        if (item.mediaId.isBlank()) return
+        val key = com.ljyh.mei.di.repository.queueResumeKeyOf(item.queueSource) ?: return
+        val index = player.currentMediaItemIndex
+        if (index < 0) return
+        scope.launch {
+            try {
+                queueResumeRepository.record(key, item.mediaId, index)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.tag("MusicService").e(e, "save queue resume failed")
             }
         }
     }
@@ -1278,6 +1333,10 @@ class MusicService : MediaLibraryService(),
         if (resumeCheckedAtReady) return
         resumeCheckedAtReady = true
         val item = player.currentMediaItem ?: return
+        if (queueManager.suppressTrackResume) {
+            clearPendingResume()
+            return
+        }
         if (player.currentPosition <= RESUME_SLACK_MS) {
             resumeFromProgress(item.mediaId)
         } else {
@@ -1301,8 +1360,11 @@ class MusicService : MediaLibraryService(),
                 clearPendingResume()
             }
             sampleProgress(persist = false)
-            resumeFromProgress(mediaItem.mediaId)
+            // 歌单级记忆只承诺「从第 8 首开始」，整条队列不再做单曲秒数续播；
+            // 播客队列不抑制，集内进度正是它要的。
+            if (!queueManager.suppressTrackResume) resumeFromProgress(mediaItem.mediaId)
             recordRecentPodcast(mediaItem)
+            recordQueueResume(mediaItem)
         }
     }
 

@@ -49,7 +49,7 @@
 - **播客播放保护**：`playback/source/PodcastTrackRegistry.kt` 记录播客歌曲 id（**SharedPreferences 持久化**，`AppContext.onCreate` 调 `install`）；`MediaUriProvider` 对命中项固定 `standard` 音质并跳过 LX／解灰兜底（否则会白等 15 秒）。普通歌曲在目标音质取不到地址时，会再降级试一次 `standard`。
 - **应用内更新**：`data/repository/UpdateRepository.kt` + `ui/screen/update/`，入口在 设置 → 检查更新；安装包下载到 `filesDir/updates`，经 `FileProvider`（authority `${applicationId}.fileprovider`）交给系统安装器；需要 `REQUEST_INSTALL_PACKAGES` 权限。Release 资源名由 `tools/ci/prepare-apks.py` 生成，格式 `Mei_<tag>_<abi>.apk`，更新逻辑按 ABI 匹配。
 - **歌词页控制栏**：`PreferenceKeys.LyricsControlsAutoHideKey`（默认 false）控制是否 3 秒自动收起；点击歌词区域不再切换控制栏，只有上下滑动歌词才切换显隐。
-- **发布**：`versionName` 与 tag 保持一致（当前 2.3.6 / versionCode 11）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
+- **发布**：`versionName` 与 tag 保持一致（当前 2.3.7 / versionCode 12）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
 
 ## v2.3.0 起：播客体验与播放记忆
 
@@ -134,3 +134,33 @@
 - **READY 后补查 + 落地校验**：`onPlaybackStateChanged(STATE_READY)` 每首补查一次续播（`resumeCheckedAtReady`）；`verifyPendingResume` 在每秒采样里比对 `pendingResumeMs`，位置没跟上说明 seek 被丢了，补最多 2 次、窗口 8 秒，之后放手不再干扰用户手动拖动。三个环节合起来，即使某一次 seek 没生效也会被纠回来。
 - **入口都带上位置**：卡片播放键（`PodcastPlaybackViewModel.buildQueue` 读 `PlaybackProgressRepository.progressOf`）、卡片回落单集（`RecentPodcastEpisode.asSingleQueue(resumeMs)`）、电台页点某一集（`PlayerConnection.onTrackClicked(..., startPositionMs)`）都显式传起点。判断门槛统一走 `PlaybackProgressPolicy.resumePosition(saved)`（听完 / 不足 15 秒返回 null），避免界面与播放服务各写一套。
 - **尾部长度的判断收敛**：`resumeFromProgress` 里「距结尾 90 秒就不续播」的特例去掉，统一 5 秒。播客听到 38:30 也该接着听，「听完」已经由 `completed` 负责判定，两者不该互相打架。
+
+## v2.3.7 起：音乐库首页改版 + 所有集合记住「播到哪一条」
+
+### 记忆分两层，不要混
+
+| 层 | 存哪 | 记什么 | 谁用 |
+| --- | --- | --- | --- |
+| 单曲秒级 | Room `playback_progress`（DB 20 起） | 某首歌听到第几秒、是否听完 | 播客续播、详情页点某一首 |
+| 队列级 | Room `queue_resume`（DB 21→22） | 某个集合上次播到队列里哪一条（`mediaId` + 序号） | 首页卡片副标题「第 8 首」、点播放键的落点 |
+
+- **为什么歌单不记秒数**：歌单要的是「第 8 首 + 0:00」。如果不清掉单曲秒级续播，定位到第 8 首后那一首残留的半截进度会把播放位置拽进中段。因此 `Queue.suppressTrackResume` 在队列级关闭秒级续播：歌单 / 专辑 / 喜欢队列传 `true`，播客队列保持 `false`（集内进度正是它要的）。传递链 `Queue.suppressTrackResume` → `PlaybackQueueManager.suppressTrackResume` → `MusicService.onMediaItemTransition / onPlaybackStateChanged` 跳过 `resumeFromProgress`。
+- **按 mediaId 定位而不是序号**：开启随机播放后队列遍历顺序会变，`ListQueue.startingAt(mediaId)` 用 id 找位置，找不到（歌被移出歌单）就从头播。
+- **`queue_resume` 的 key**：`queueResumeKeyOf(QueueSource?)` 白名单折算成 `playlist:<id>` / `album:<id>` / `podcast:<radioId>` / `daily` / `local`；搜索、歌手页、私人 FM、播放历史返回 null（每次内容都不同，记了也没意义）。写入点在 `MusicService.recordQueueResume`（`onMediaItemTransition` 时按 `currentMediaItemIndex` 落库）。
+- **播放模式按来源独立记忆**：`PlayModeMemoryStore`（DataStore `playback.modeMemory` 存 `Map<key, PlayModeSnapshot(shuffle, repeat)>` + 内存快照同步读，因为 `playQueue` 不是挂起函数）。`playQueue` 入队时按 `queueResumeKeyOf(queue.source)` 取历史值覆盖调用方默认值；用户手动切随机/循环由 `onShuffleModeEnabledChanged / onRepeatModeChanged` 回写。**600ms 静音窗口** `beginExternalChange()`：程序自己应用记忆值也会触发回调，不屏蔽就会在切歌单的瞬间把 A 歌单的模式写成 B 的。
+- **卡片上的「正在播放」**：`LibraryBannerCard` 的 `isCurrent`（`PlayerConnection.currentQueueSource` 折算的 key 与卡片 key 相等）决定左缘 3dp 竖色条；此时播放键变暂停键且只切 `playWhenReady`，不重建队列。长按播放键（`combinedClickable` 的 `onLongClick`）= 从头播，走 `fromMemory = false`。
+
+### 首页布局
+
+- `LibraryBannerCard`（`component/LibraryBannerCard.kt`）是唯一通栏卡：封面铺满 + 底部渐变压暗 + 左下标题/副标题 + 右下圆形键，`compact = height < 132.dp` 决定字号与按钮 40/48dp。喜欢、创建歌单、收藏歌单、收藏专辑、播客五处共用，旧的 `LibraryPodcastCard` 已删除。
+- 卡片高度是设置项：`LibraryCardHeightKey`（112–200dp，默认 148）。副标题统一由 `bannerSubtitle(countLabel, indexInList, totalCount, mode, trailing)` 拼「32 首 · 第 8 首 · 随机」。
+- 区段顺序 `LibrarySectionOrderKey` 保留；旧顶栏弹窗 `LibraryLayoutDialog` 删除，改为独立页面 `Screen.LibraryLayout`（`library/layout`）→ `LibraryLayoutScreen`：预览卡 + 高度滑块（4dp 档）+ 4 个快捷档 + 区块上下箭头 + 三组条目勾选/排序（已选带↑↓、未选带＋、搜索框按组过滤）+ 两个重置按钮（`resetLayout` 清三个键、`clearPlayModeMemory` 清模式记忆）。
+- 勾选列表 `LibraryPinnedKey` 存 `LibraryPinned(created, collected, albums)`。**`LibraryPinnedCodec.decode` 返回可空**：null = 从未配置（回落到智能排序前 4 个），空列表 = 用户主动全部取消（整块隐藏，连标题一起）。右侧「全部 ›」仍在，进集合页。
+- 区块内的条目改成一列通栏大卡（原来是横向 `LazyRow` + `ArtworkCard`），`pickPinned` 按配置取、失效 id 跳过。
+- 平板 / 横屏走 `AdaptiveLibraryContent`，其中 `compact` 分支复用 `LibrarySinglePaneContent` 因此同样生效；平板主从布局未接入。
+
+### 已知限制
+
+- 升级前听完的集数仍显示「未播放」（v2.3.0 就存在，旧记录已被删）。
+- 播客卡片的「最近收听那一集」仍读全局 `RecentPodcastKey`，多个电台会互相覆盖；`queue_resume` 里按电台分别存了，但卡片暂未改用它。
+- 歌单里只剩一首可播（详情缺曲目）时会从第 1 首开始，`startingAt` 找不到 id 即从头播。

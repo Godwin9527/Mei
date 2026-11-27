@@ -15,6 +15,8 @@ class ListQueue(
     val startIndex: Int = 0,
     val position: Int = 0,
     override val source: QueueSource = QueueSource.fromQueue(id, title),
+    /** 见 [Queue.suppressTrackResume]。 */
+    override val suppressTrackResume: Boolean = false,
 ) : Queue {
 
     override val totalCount: Int = items.size
@@ -38,6 +40,7 @@ class ListQueue(
             startIndex = index,
             position = positionMs.coerceAtLeast(0),
             source = source,
+            suppressTrackResume = suppressTrackResume,
         )
     }
 

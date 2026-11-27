@@ -102,6 +102,15 @@ val RecentPodcastKey = stringPreferencesKey("podcast.recentEpisode")
 /** 音乐库区块顺序，按逗号分隔的区块 id 保存。 */
 val LibrarySectionOrderKey = stringPreferencesKey("library.sectionOrder")
 
+/** 音乐库首页通栏卡的高度（dp），统管喜欢、歌单、专辑、播客四类卡片。 */
+val LibraryCardHeightKey = intPreferencesKey("library.cardHeight")
+
+/** 各区块内勾选上首页的条目，JSON：{"created":["id",...],"collected":[...],"albums":[...]} */
+val LibraryPinnedKey = stringPreferencesKey("library.pinned")
+
+/** 按队列来源记忆的播放模式，JSON：{"playlist:123":{"shuffle":true,"repeat":1}} */
+val PlayModeMemoryKey = stringPreferencesKey("playback.modeMemory")
+
 val KeepPlayerScreenOnKey = booleanPreferencesKey("keepPlayerScreenOn")
 val NoAudioSourceKey = booleanPreferencesKey("noAudioSource")
 val SmartTransitionEnabledKey = booleanPreferencesKey("smartTransition.enabled")

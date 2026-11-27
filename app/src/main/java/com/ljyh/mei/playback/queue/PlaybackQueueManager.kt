@@ -45,12 +45,21 @@ class PlaybackQueueManager(
     private val player: Player,
     private val apiService: ApiService,
     private val weApiService: WeApiService,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val playModeStore: com.ljyh.mei.playback.PlayModeMemoryStore,
 ) : Player.Listener {
 
     private val TAG = "QueueManager"
     private val _queueState = MutableStateFlow<QueueState>(QueueState.Idle)
     private val loadingIds = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * 当前队列是否抑制「单曲秒数续播」。由 [playQueue] 传入的队列决定，
+     * 播客队列为 false（集内进度就是它要的），歌单/专辑队列为 true。
+     */
+    @Volatile
+    var suppressTrackResume: Boolean = false
+        private set
 
     /** 电台 id → (可播 id → 节目元数据)，只用节目表补一回。 */
     private val podcastProgramCache = ConcurrentHashMap<Long, Map<String, MediaMetadata>>()
@@ -172,6 +181,7 @@ class PlaybackQueueManager(
         playWhenReady: Boolean = true,
     ) {
         isFmMode = false
+        suppressTrackResume = queue.suppressTrackResume
         scope.launch(Dispatchers.Main) {
             try {
                 _queueState.value = QueueState.Loading(queue.title ?: "加载中")
@@ -188,6 +198,18 @@ class PlaybackQueueManager(
                     (item.second ?: createPlaceholder(item.first)).withQueueEntry(queue.source)
                 }
 
+                // 按队列来源取记住的播放模式；没有记录才退回调用方给的默认值，
+                // 这样老用户第一次用不会突然从「顺序」变成别的。
+                val remembered = playModeStore.snapshot(
+                    com.ljyh.mei.di.repository.queueResumeKeyOf(queue.source)
+                )
+                val targetShuffle = remembered?.shuffle ?: startInShuffleMode
+                val targetRepeat = remembered?.repeat ?: Player.REPEAT_MODE_ALL
+
+                // 下面几步设置随机/循环会触发播放器回调，若不屏蔽，
+                // 切到 B 歌单的瞬间会把 A 歌单记住的模式改写成 B 的。
+                playModeStore.beginExternalChange()
+
                 // 强制先关闭随机模式 必须先关掉，才能保证 setMediaItems 里的 index 是线性的、准确的
                 player.shuffleModeEnabled = false
                 _isShuffleModeEnabled.value = false
@@ -200,11 +222,11 @@ class PlaybackQueueManager(
                     status.position.toLong()
                 )
 
-                player.repeatMode = Player.REPEAT_MODE_ALL
+                player.repeatMode = targetRepeat
                 player.prepare()
 
                 // 如果需要，再开启随机 此时当前播放的歌曲已经定下来了，ExoPlayer 只会打乱"后面"的歌
-                if (startInShuffleMode) {
+                if (targetShuffle) {
                     player.shuffleModeEnabled = true
                     _isShuffleModeEnabled.value = true
                 }

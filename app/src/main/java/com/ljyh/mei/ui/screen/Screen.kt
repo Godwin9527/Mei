@@ -13,6 +13,7 @@ sealed class Screen(val route:String) {
     data object Library:Screen("library")
     data object PersonalCenter:Screen("library/profile")
     data object LibraryCollection:Screen("library/collection")
+    data object LibraryLayout:Screen("library/layout")
     data object Podcasts: Screen("library/podcasts")
     data object PodcastDetail: Screen("library/podcast")
     data object FindMusic: Screen("find_music")

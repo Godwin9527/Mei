@@ -8,12 +8,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.CloudOff
-import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,24 +26,31 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.ljyh.mei.constants.LibraryCardHeightKey
+import com.ljyh.mei.constants.LibraryPinnedKey
+import com.ljyh.mei.constants.PlayModeMemoryKey
 import com.ljyh.mei.constants.RecentPodcastKey
 import com.ljyh.mei.data.model.domain.MediaMetadata
 import com.ljyh.mei.data.model.domain.RecentPodcastCodec
 import com.ljyh.mei.data.model.domain.RecentPodcastEpisode
 import com.ljyh.mei.data.model.domain.toMediaItem
-import com.ljyh.mei.di.repository.PlaybackProgressPolicy
+import com.ljyh.mei.data.model.room.PlaybackProgress
+import com.ljyh.mei.data.model.room.Playlist
+import com.ljyh.mei.data.model.room.QueueResume
+import com.ljyh.mei.di.repository.queueResumeKeyOf
+import com.ljyh.mei.playback.PlayModeSnapshot
+import com.ljyh.mei.playback.decodePlayModeMemory
 import com.ljyh.mei.playback.queue.ListQueue
 import com.ljyh.mei.playback.queue.QueueSource
+import com.ljyh.mei.playback.shortLabel
 import com.ljyh.mei.ui.component.MeiSectionTitle
 import com.ljyh.mei.ui.component.MeiShowAllButton
 import com.ljyh.mei.ui.component.MeiStatePanel
 import com.ljyh.mei.ui.component.card.ArtworkCard
-import com.ljyh.mei.ui.component.card.VinylAlbumCard
-import com.ljyh.mei.ui.component.artwork.VinylAlbumArtworkRatio
 import com.ljyh.mei.ui.component.glass.*
 import com.ljyh.mei.ui.component.layout.LocalPageStartInset
 import com.ljyh.mei.ui.component.layout.meiPageGutter
@@ -49,6 +59,7 @@ import com.ljyh.mei.ui.component.utils.rememberDeviceInfo
 import com.ljyh.mei.ui.local.LocalPlayerAwareWindowInsets
 import com.ljyh.mei.ui.local.LocalNavController
 import com.ljyh.mei.ui.local.LocalPlayerConnection
+import com.ljyh.mei.ui.model.Album
 import com.ljyh.mei.ui.screen.Screen
 import com.ljyh.mei.ui.screen.main.library.*
 import com.ljyh.mei.ui.screen.podcast.PodcastPlaybackViewModel
@@ -67,7 +78,9 @@ fun LibraryBrowseLayout(
     signedIn: Boolean,
     scrollBehavior: TopAppBarScrollBehavior,
     preparingPlayback: Boolean,
+    preparingKey: String?,
     canPlay: Boolean,
+    resumeByKey: Map<String, QueueResume>,
     onPlayLiked: (String) -> Unit,
     onOpenPlaylist: (String) -> Unit,
     onOpenAlbum: (Long) -> Unit,
@@ -75,6 +88,9 @@ fun LibraryBrowseLayout(
     onLogin: () -> Unit,
     onRetry: () -> Unit,
     onOpenProfile: () -> Unit = {},
+    onPlayPlaylist: (String, Boolean) -> Unit = { id, _ -> onPlayLiked(id) },
+    onPlayAlbum: (Long, Boolean) -> Unit = { _, _ -> },
+    onTogglePlayback: () -> Unit = {},
 ) {
     val source = rememberHazeState()
     val listState = rememberLazyListState()
@@ -93,7 +109,19 @@ fun LibraryBrowseLayout(
     }
     val data = (state as? LibraryUiState.Content)?.data
     val sectionOrder = rememberLibrarySectionOrder()
-    var showLayoutEditor by remember { mutableStateOf(false) }
+
+    val cardHeightPref = rememberPreference(LibraryCardHeightKey, DEFAULT_LIBRARY_CARD_HEIGHT)
+    val cardHeight = coerceLibraryCardHeight(cardHeightPref.value).dp
+    val pinnedPref = rememberPreference(LibraryPinnedKey, "")
+    val pinned = remember(pinnedPref.value) { LibraryPinnedCodec.decode(pinnedPref.value) }
+    val modePref = rememberPreference(PlayModeMemoryKey, "")
+    val modeMemory = remember(modePref.value) { decodePlayModeMemory(modePref.value) }
+
+    val connection = LocalPlayerConnection.current
+    val queueSource = connection?.currentQueueSource?.collectAsStateWithLifecycle()?.value
+    val currentQueueKey = remember(queueSource) { queueResumeKeyOf(queueSource) }
+    val playingAudio = connection?.isPlaying?.collectAsStateWithLifecycle()?.value ?: false
+
     val composition = remember(data) { data?.dashboardSelection() }
     val collected = remember(data) { data?.playlistsIn(LibraryCollection.Collected).orEmpty() }
     val createdLimit = if (tablet) 8 else 4
@@ -131,7 +159,7 @@ fun LibraryBrowseLayout(
                     .hazeSource(source)
                     .background(MaterialTheme.colorScheme.surface),
                 contentPadding = PaddingValues(top = top + 12.dp, bottom = bottom + 24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 item(key = "title") {
                     MeiLargeTitle(
@@ -171,19 +199,24 @@ fun LibraryBrowseLayout(
                     else -> {
                         if (!tablet && data != null) {
                             mobileLibraryContent(
-                                data,
-                                likedArtwork,
-                                likedSongTitle,
-                                mobileColumns,
-                                if (compactWide) 128.dp else 190.dp,
-                                preparingPlayback,
-                                canPlay,
-                                rowPadding,
-                                sectionOrder,
-                                onOpenPlaylist,
-                                onPlayLiked,
-                                onOpenAlbum,
-                                onOpenCollection
+                                data = data,
+                                likedArtwork = likedArtwork,
+                                cardHeight = cardHeight,
+                                pinned = pinned,
+                                resumeByKey = resumeByKey,
+                                modeMemory = modeMemory,
+                                currentQueueKey = currentQueueKey,
+                                playingAudio = playingAudio,
+                                preparingKey = preparingKey,
+                                canPlay = canPlay,
+                                rowPadding = rowPadding,
+                                order = sectionOrder,
+                                onOpenPlaylist = onOpenPlaylist,
+                                onOpenAlbum = onOpenAlbum,
+                                onOpenCollection = onOpenCollection,
+                                onPlayPlaylist = onPlayPlaylist,
+                                onPlayAlbum = onPlayAlbum,
+                                onTogglePlayback = onTogglePlayback,
                             )
                         } else {
                             if (composition != null) item(key = "library_dashboard") {
@@ -301,7 +334,6 @@ fun LibraryBrowseLayout(
                                 }
                             }
                         }
-                        mobilePodcastSection(rowPadding, 190.dp, canPlay)
                         if (state is LibraryUiState.Content && state.warning != null) item(key = "warning") {
                             Row(
                                 Modifier
@@ -325,8 +357,8 @@ fun LibraryBrowseLayout(
         MeiHazeTopBar(state = source, title = "音乐库", progress = progress,
                 actions = {
                     if (!tablet) {
-                        IconButton(onClick = { showLayoutEditor = true }) {
-                            Icon(Icons.Rounded.SwapVert, contentDescription = "调整音乐库顺序")
+                        IconButton(onClick = { Screen.LibraryLayout.navigate(LocalNavController.current) }) {
+                            Icon(Icons.Rounded.Tune, contentDescription = "音乐库首页布局")
                         }
                     }
                     com.ljyh.mei.ui.screen.profile.PersonalCenterEntry(
@@ -334,13 +366,6 @@ fun LibraryBrowseLayout(
                         data?.profile?.avatarUrl.takeIf { signedIn },
                     )
                 })
-    }
-
-    if (showLayoutEditor) {
-        LibraryLayoutDialog(
-            order = sectionOrder,
-            onDismiss = { showLayoutEditor = false },
-        )
     }
 }
 
@@ -370,274 +395,373 @@ private fun LibraryEmptyLabel(text: String, modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * 卡片副标题：曲目数 → 播到第几首 → 播放模式，按重要性从左往右排，
+ * 宽度不够时截掉的是后面的信息，不会出现「只见作者不见进度」。
+ */
+private fun bannerSubtitle(
+    countLabel: String?,
+    indexInList: Int?,
+    totalCount: Int,
+    mode: PlayModeSnapshot?,
+    trailing: String? = null,
+): String {
+    val index = indexInList?.takeIf { it >= 0 && (totalCount <= 0 || it < totalCount) }
+    return listOfNotNull(
+        countLabel?.takeIf { it.isNotBlank() },
+        index?.let { "第 ${it + 1} 首" },
+        mode?.shortLabel(),
+        trailing?.takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
+}
 
-private fun androidx.compose.foundation.lazy.LazyListScope.mobileLibraryContent(
+private fun LazyListScope.mobileLibraryContent(
     data: LibraryContentUiState,
     likedArtwork: String?,
-    likedSongTitle: String?,
-    columns: Int,
-    likedHeight: Dp,
-    preparingPlayback: Boolean,
+    cardHeight: Dp,
+    pinned: LibraryPinned?,
+    resumeByKey: Map<String, QueueResume>,
+    modeMemory: Map<String, PlayModeSnapshot>,
+    currentQueueKey: String?,
+    playingAudio: Boolean,
+    preparingKey: String?,
     canPlay: Boolean,
     rowPadding: PaddingValues,
     order: List<LibrarySection>,
     onOpenPlaylist: (String) -> Unit,
-    onPlayLiked: (String) -> Unit,
     onOpenAlbum: (Long) -> Unit,
     onOpenCollection: (LibraryCollection) -> Unit,
+    onPlayPlaylist: (String, Boolean) -> Unit,
+    onPlayAlbum: (Long, Boolean) -> Unit,
+    onTogglePlayback: () -> Unit,
 ) {
-    // 区块顺序由「调整音乐库顺序」决定，这里只按顺序把它们拼出来。
+    val created = data.createdPlaylistOverview()
+    val collected = data.playlistsIn(LibraryCollection.Collected)
+    val albums = data.albums
+
+    // 从未配置过时按智能排序取前 4 个；配置过就严格按用户勾选与顺序，失效 id 自动跳过。
+    val createdShown = pickPinned(pinned?.created, created) { it.id }
+    val collectedShown = pickPinned(pinned?.collected, collected) { it.id }
+    val albumsShown = pickPinned(pinned?.albums, albums) { it.id.toString() }
+
     order.forEach { section ->
         when (section) {
             LibrarySection.LIKED -> mobileLikedSection(
-                data, likedArtwork, likedSongTitle, likedHeight,
-                preparingPlayback, canPlay, rowPadding, onOpenPlaylist, onPlayLiked,
+                data = data,
+                likedArtwork = likedArtwork,
+                cardHeight = cardHeight,
+                resumeByKey = resumeByKey,
+                modeMemory = modeMemory,
+                currentQueueKey = currentQueueKey,
+                playingAudio = playingAudio,
+                preparingKey = preparingKey,
+                canPlay = canPlay,
+                rowPadding = rowPadding,
+                onOpenPlaylist = onOpenPlaylist,
+                onPlayPlaylist = onPlayPlaylist,
+                onTogglePlayback = onTogglePlayback,
             )
 
-            LibrarySection.CREATED -> mobileCreatedSection(
-                data, columns, rowPadding, onOpenPlaylist, onOpenCollection,
+            LibrarySection.CREATED -> mobilePlaylistShelf(
+                key = "created",
+                title = "我创建的歌单",
+                entries = createdShown,
+                showAll = true,
+                cardHeight = cardHeight,
+                resumeByKey = resumeByKey,
+                modeMemory = modeMemory,
+                currentQueueKey = currentQueueKey,
+                playingAudio = playingAudio,
+                preparingKey = preparingKey,
+                canPlay = canPlay,
+                rowPadding = rowPadding,
+                onOpenCollection = onOpenCollection,
+                onOpenPlaylist = onOpenPlaylist,
+                onPlayPlaylist = onPlayPlaylist,
+                onTogglePlayback = onTogglePlayback,
+                collection = LibraryCollection.Created,
             )
 
-            LibrarySection.COLLECTED -> mobileCollectedSection(
-                data, columns, rowPadding, onOpenPlaylist, onOpenCollection,
+            LibrarySection.COLLECTED -> mobilePlaylistShelf(
+                key = "collected",
+                title = "收藏歌单",
+                entries = collectedShown,
+                showAll = true,
+                cardHeight = cardHeight,
+                resumeByKey = resumeByKey,
+                modeMemory = modeMemory,
+                currentQueueKey = currentQueueKey,
+                playingAudio = playingAudio,
+                preparingKey = preparingKey,
+                canPlay = canPlay,
+                rowPadding = rowPadding,
+                onOpenCollection = onOpenCollection,
+                onOpenPlaylist = onOpenPlaylist,
+                onPlayPlaylist = onPlayPlaylist,
+                onTogglePlayback = onTogglePlayback,
+                collection = LibraryCollection.Collected,
             )
 
-            LibrarySection.ALBUMS -> mobileAlbumsSection(
-                data, rowPadding, onOpenAlbum, onOpenCollection,
+            LibrarySection.ALBUMS -> mobileAlbumShelf(
+                entries = albumsShown,
+                cardHeight = cardHeight,
+                resumeByKey = resumeByKey,
+                modeMemory = modeMemory,
+                currentQueueKey = currentQueueKey,
+                playingAudio = playingAudio,
+                preparingKey = preparingKey,
+                canPlay = canPlay,
+                rowPadding = rowPadding,
+                onOpenCollection = onOpenCollection,
+                onOpenAlbum = onOpenAlbum,
+                onPlayAlbum = onPlayAlbum,
+                onTogglePlayback = onTogglePlayback,
             )
 
             LibrarySection.PODCASTS -> mobilePodcastSection(
-                rowPadding, likedHeight, canPlay,
+                rowPadding = rowPadding,
+                cardHeight = cardHeight,
+                canPlay = canPlay,
+                currentQueueKey = currentQueueKey,
+                playingAudio = playingAudio,
+                onTogglePlayback = onTogglePlayback,
             )
         }
     }
 }
 
-private fun androidx.compose.foundation.lazy.LazyListScope.mobileLikedSection(
+/** 按配置挑出要显示的条目：未配置走默认前 4，配置了就按顺序取，失效 id 跳过。 */
+private fun <T> pickPinned(
+    pinnedIds: List<String>?,
+    all: List<T>,
+    idOf: (T) -> String,
+): List<T> {
+    if (pinnedIds == null) return all.take(DEFAULT_PINNED_COUNT)
+    if (pinnedIds.isEmpty()) return emptyList()
+    val byId = all.associateBy(idOf)
+    return pinnedIds.mapNotNull(byId::get)
+}
+
+private fun LazyListScope.mobileLikedSection(
     data: LibraryContentUiState,
     likedArtwork: String?,
-    likedSongTitle: String?,
-    likedHeight: Dp,
-    preparingPlayback: Boolean,
+    cardHeight: Dp,
+    resumeByKey: Map<String, QueueResume>,
+    modeMemory: Map<String, PlayModeSnapshot>,
+    currentQueueKey: String?,
+    playingAudio: Boolean,
+    preparingKey: String?,
     canPlay: Boolean,
     rowPadding: PaddingValues,
     onOpenPlaylist: (String) -> Unit,
-    onPlayLiked: (String) -> Unit,
+    onPlayPlaylist: (String, Boolean) -> Unit,
+    onTogglePlayback: () -> Unit,
 ) {
     val liked = data.likedPlaylist()
+    val key = liked?.id?.let { "playlist:$it" }
     item(key = "mobile_liked") {
-        LibraryLikedPlaylist(
-            liked, likedArtwork, preparingPlayback, canPlay,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(rowPadding)
-                .height(likedHeight),
+        LibraryBannerCard(
+            title = "我喜欢的音乐",
+            subtitle = bannerSubtitle(
+                countLabel = liked?.let { "${it.count} 首" },
+                indexInList = key?.let { resumeByKey[it]?.indexInList },
+                totalCount = liked?.count ?: 0,
+                mode = key?.let { modeMemory[it] },
+            ),
+            coverUrl = likedArtwork,
+            fallbackIcon = Icons.Rounded.Favorite,
+            height = cardHeight,
+            isCurrent = key != null && key == currentQueueKey,
+            isPlaying = playingAudio,
+            preparing = preparingKey != null && preparingKey == key,
+            canPlay = canPlay && liked != null && liked.count > 0,
+            modifier = Modifier.padding(rowPadding),
             onOpen = { liked?.let { onOpenPlaylist(it.id) } },
-            onPlay = { liked?.let { onPlayLiked(it.id) } },
-            songTitle = likedSongTitle, playAtBottom = true
+            onPlay = { liked?.let { onPlayPlaylist(it.id, false) } },
+            onPlayFromStart = { liked?.let { onPlayPlaylist(it.id, true) } },
+            onToggle = onTogglePlayback,
         )
     }
 }
 
-private fun androidx.compose.foundation.lazy.LazyListScope.mobileCreatedSection(
-    data: LibraryContentUiState,
-    columns: Int,
+private fun LazyListScope.mobilePlaylistShelf(
+    key: String,
+    title: String,
+    entries: List<Playlist>,
+    showAll: Boolean,
+    cardHeight: Dp,
+    resumeByKey: Map<String, QueueResume>,
+    modeMemory: Map<String, PlayModeSnapshot>,
+    currentQueueKey: String?,
+    playingAudio: Boolean,
+    preparingKey: String?,
+    canPlay: Boolean,
     rowPadding: PaddingValues,
-    onOpenPlaylist: (String) -> Unit,
+    collection: LibraryCollection,
     onOpenCollection: (LibraryCollection) -> Unit,
-) {
-    val created = data.createdPlaylistOverview()
-    item(key = "mobile_created_heading") {
-        LibrarySectionHeading(
-            "我创建的歌单",
-            true,
-            Modifier
-                .padding(rowPadding)
-                .padding(top = 8.dp)
-        ) {
-            onOpenCollection(LibraryCollection.Created)
-        }
-    }
-    if (created.isEmpty()) item(key = "mobile_created_empty") {
-        LibraryEmptyLabel(
-            if (data.playlistsLoading) "同步中" else if (data.playlistsError != null) "暂时无法同步歌单" else "还没有创建歌单",
-            Modifier.padding(rowPadding)
-        )
-    }
-    items(created.take(4).chunked(columns), key = { "mobile_created_${it.first().id}" }) { row ->
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(rowPadding),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            row.forEach { playlist ->
-                ArtworkCard(
-                    playlist.title,
-                    playlist.cover,
-                    Modifier.weight(1f),
-                    subtitle = "${playlist.count} 首",
-                ) {
-                    onOpenPlaylist(playlist.id)
-                }
-            }
-            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
-        }
-    }
-}
-
-private fun androidx.compose.foundation.lazy.LazyListScope.mobileCollectedSection(
-    data: LibraryContentUiState,
-    columns: Int,
-    rowPadding: PaddingValues,
     onOpenPlaylist: (String) -> Unit,
-    onOpenCollection: (LibraryCollection) -> Unit,
+    onPlayPlaylist: (String, Boolean) -> Unit,
+    onTogglePlayback: () -> Unit,
 ) {
-    val collected = data.playlistsIn(LibraryCollection.Collected)
-    item(key = "mobile_collected_heading") {
-        LibrarySectionHeading(
-            "收藏歌单",
-            true,
-            Modifier
-                .padding(rowPadding)
-                .padding(top = 8.dp)
-        ) {
-            onOpenCollection(LibraryCollection.Collected)
+    // 勾 0 个等于「不要这块」：标题和卡片一起隐藏，首页不留空壳。
+    if (entries.isEmpty()) return
+    item(key = "mobile_${key}_heading") {
+        LibrarySectionHeading(title, showAll, Modifier.padding(rowPadding)) {
+            onOpenCollection(collection)
         }
     }
-    if (collected.isEmpty()) item(key = "mobile_collected_empty") {
-        LibraryEmptyLabel(
-            if (data.playlistsLoading) "同步中" else if (data.playlistsError != null) "暂时无法同步歌单" else "还没有收藏歌单",
-            Modifier.padding(rowPadding)
+    items(entries, key = { "mobile_${key}_${it.id}" }) { playlist ->
+        val queueKey = "playlist:${playlist.id}"
+        LibraryBannerCard(
+            title = playlist.title,
+            subtitle = bannerSubtitle(
+                countLabel = "${playlist.count} 首",
+                indexInList = resumeByKey[queueKey]?.indexInList,
+                totalCount = playlist.count,
+                mode = modeMemory[queueKey],
+            ),
+            coverUrl = playlist.cover,
+            fallbackIcon = Icons.Rounded.LibraryMusic,
+            height = cardHeight,
+            isCurrent = queueKey == currentQueueKey,
+            isPlaying = playingAudio,
+            preparing = preparingKey != null && preparingKey == queueKey,
+            canPlay = canPlay && playlist.count > 0,
+            modifier = Modifier.padding(rowPadding),
+            onOpen = { onOpenPlaylist(playlist.id) },
+            onPlay = { onPlayPlaylist(playlist.id, false) },
+            onPlayFromStart = { onPlayPlaylist(playlist.id, true) },
+            onToggle = onTogglePlayback,
         )
-    }
-    items(collected.take(4).chunked(columns), key = { "mobile_collected_${it.first().id}" }) { row ->
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(rowPadding),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            row.forEach { playlist ->
-                ArtworkCard(
-                    playlist.title,
-                    playlist.cover,
-                    Modifier.weight(1f),
-                    subtitle = playlist.authorName,
-                ) {
-                    onOpenPlaylist(playlist.id)
-                }
-            }
-            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
-        }
     }
 }
 
-private fun androidx.compose.foundation.lazy.LazyListScope.mobileAlbumsSection(
-    data: LibraryContentUiState,
+private fun LazyListScope.mobileAlbumShelf(
+    entries: List<Album>,
+    cardHeight: Dp,
+    resumeByKey: Map<String, QueueResume>,
+    modeMemory: Map<String, PlayModeSnapshot>,
+    currentQueueKey: String?,
+    playingAudio: Boolean,
+    preparingKey: String?,
+    canPlay: Boolean,
     rowPadding: PaddingValues,
+    onOpenCollection: (LibraryCollection) -> Unit,
     onOpenAlbum: (Long) -> Unit,
-    onOpenCollection: (LibraryCollection) -> Unit,
+    onPlayAlbum: (Long, Boolean) -> Unit,
+    onTogglePlayback: () -> Unit,
 ) {
+    if (entries.isEmpty()) return
     item(key = "mobile_albums_heading") {
-        LibrarySectionHeading("收藏专辑", true, Modifier
-            .padding(rowPadding)
-            .padding(top = 8.dp)) {
+        LibrarySectionHeading("收藏专辑", true, Modifier.padding(rowPadding)) {
             onOpenCollection(LibraryCollection.Albums)
         }
     }
-    if (data.albums.isEmpty()) item(key = "mobile_albums_empty") {
-        LibraryEmptyLabel(
-            if (data.albumsLoading) "同步中" else if (data.albumsError != null) "暂时无法同步专辑" else "还没有收藏专辑",
-            Modifier.padding(rowPadding)
+    items(entries, key = { "mobile_album_${it.id}" }) { album ->
+        val queueKey = "album:${album.id}"
+        LibraryBannerCard(
+            title = album.title,
+            subtitle = bannerSubtitle(
+                countLabel = null,
+                indexInList = resumeByKey[queueKey]?.indexInList,
+                totalCount = 0,
+                mode = modeMemory[queueKey],
+                trailing = album.artist.joinToString(" / ") { it.name },
+            ),
+            coverUrl = album.cover,
+            fallbackIcon = Icons.Rounded.Album,
+            height = cardHeight,
+            isCurrent = queueKey == currentQueueKey,
+            isPlaying = playingAudio,
+            preparing = preparingKey != null && preparingKey == queueKey,
+            canPlay = canPlay,
+            modifier = Modifier.padding(rowPadding),
+            onOpen = { onOpenAlbum(album.id) },
+            onPlay = { onPlayAlbum(album.id, false) },
+            onPlayFromStart = { onPlayAlbum(album.id, true) },
+            onToggle = onTogglePlayback,
         )
-    } else item(key = "mobile_albums_shelf") {
-        LazyRow(contentPadding = rowPadding, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(data.albums, key = { it.id }) { album ->
-                VinylAlbumCard(
-                    title = album.title, coverUrl = album.cover,
-                    modifier = Modifier.width(144.dp * VinylAlbumArtworkRatio),
-                    subtitle = album.artist.joinToString(" / ") { it.name },
-                ) { onOpenAlbum(album.id) }
-            }
-        }
     }
 }
 
 /**
- * 「我关注的播客」：标题 + 通栏卡片，结构对齐「我创建的歌单」。
- *
- * 卡片主体是最近收听的那一集：点卡进电台节目单，点右下播放键直接接着上次的进度播，
- * 不用再走「音乐库 → 我关注的播客 → 找电台 → 下滑找集数」这条路。
+ * 「我关注的播客」：最近收听的那一集。点卡进节目单，点播放键定位到那一集并跳进集内进度。
  */
-private fun androidx.compose.foundation.lazy.LazyListScope.mobilePodcastSection(
+private fun LazyListScope.mobilePodcastSection(
     rowPadding: PaddingValues,
     cardHeight: Dp,
     canPlay: Boolean,
+    currentQueueKey: String?,
+    playingAudio: Boolean,
+    onTogglePlayback: () -> Unit,
 ) {
     item(key = "mobile_podcast_heading") {
         val nav = LocalNavController.current
         LibrarySectionHeading(
             "我关注的播客",
             true,
-            Modifier
-                .padding(rowPadding)
-                .padding(top = 8.dp)
+            Modifier.padding(rowPadding),
         ) { Screen.Podcasts.navigate(nav) }
     }
     item(key = "mobile_podcast_card") {
         val nav = LocalNavController.current
-        val playerConnection = LocalPlayerConnection.current
+        val connection = LocalPlayerConnection.current
         val context = LocalContext.current
         val scope = rememberCoroutineScope()
-        // 播放键要先把整张节目表拉下来才能排成队列，所以走播客侧的视图模型，
-        // 顺便把本地进度表读进来，卡片上的「已听」不再依赖偏好里那份副本。
         val playback: PodcastPlaybackViewModel = hiltViewModel()
         val raw by rememberPreference(RecentPodcastKey, "")
         val recent = remember(raw) { RecentPodcastCodec.decode(raw) }
         val progressBySong by playback.progressBySong.collectAsStateWithLifecycle()
         val preparingId by playback.preparingId.collectAsStateWithLifecycle()
-        val songId = recent?.songId?.toString()
-        val savedProgress = songId?.let { progressBySong[it] }
-        val playing = preparingId != null && preparingId == songId
-        LibraryPodcastCard(
-            recent = recent,
-            progress = savedProgress,
-            playing = playing,
-            height = cardHeight,
-            modifier = Modifier.padding(rowPadding),
-            canPlay = canPlay,
-            onOpen = {
-                recent?.let {
-                    Screen.PodcastDetail.navigate(nav) { addPath(it.radioId.toString()) }
-                }
-            },
-            onPlay = {
-                val episode = recent
-                if (episode != null && !playing) {
-                    // 回落单集时也要从上次听到的位置开始，否则「按 ▶ 从头播」还是会发生。
-                    val resumeMs = PlaybackProgressPolicy.resumePosition(savedProgress) ?: 0L
-                    scope.launch {
-                        // 用整张节目表入队并定位到这一集，才能继续上一集/下一集；
-                        // 拉不到时才回落到「只播这一集」，并明确告诉用户原因。
-                        val queue = playback.buildQueue(episode)
-                        val connection = playerConnection ?: return@launch
-                        if (queue != null) {
-                            connection.playQueue(queue, startInShuffleMode = false)
-                        } else {
-                            connection.playQueue(episode.asSingleQueue(resumeMs), startInShuffleMode = false)
-                            Toast.makeText(context, "节目表加载失败，先播放这一集", Toast.LENGTH_SHORT).show()
-                        }
+        val recentProgress: PlaybackProgress? = recent?.songId?.toString()?.let { progressBySong[it] }
+        // 播客记忆的是「哪一集 + 集内秒数」，副标题直接给集内进度比「第几集」更有用。
+        val queueKey = recent?.radioId?.let { "podcast:$it" }
+        val preparing = preparingId != null
+
+        // 用 lambda 而不是局部 fun：局部函数在 compose 作用域里会被当成 composable，
+        // 就没法塞进 LibraryBannerCard 的普通回调里了。
+        val start: (Boolean) -> Unit = { fromStart ->
+            val episode = recent
+            if (episode != null && !preparing) {
+                scope.launch {
+                    val queue = playback.buildQueue(episode, fromMemory = !fromStart)
+                    val target = connection
+                    if (target == null) return@launch
+                    if (queue != null) {
+                        target.playQueue(queue, startInShuffleMode = false)
+                    } else {
+                        // 节目表拉不到时只播这一集：至少能从这一集恢复，而不是整块失效。
+                        target.playQueue(episode.asSingleQueue(0L), startInShuffleMode = false)
+                        Toast.makeText(context, "节目表加载失败，先播放这一集", Toast.LENGTH_SHORT).show()
                     }
                 }
+            }
+        }
+
+        LibraryBannerCard(
+            title = recent?.radioName?.takeIf { it.isNotBlank() } ?: "我关注的播客",
+            subtitle = podcastSubtitle(recent, recentProgress),
+            coverUrl = recent?.coverUrl,
+            fallbackIcon = Icons.Rounded.Mic,
+            height = cardHeight,
+            isCurrent = queueKey != null && queueKey == currentQueueKey,
+            isPlaying = playingAudio,
+            preparing = preparing,
+            canPlay = canPlay && recent != null,
+            modifier = Modifier.padding(rowPadding),
+            onOpen = {
+                recent?.let { Screen.PodcastDetail.navigate(nav) { addPath(it.radioId.toString()) } }
+                    ?: Screen.Podcasts.navigate(nav)
             },
-            onBrowse = { Screen.Podcasts.navigate(nav) },
+            onPlay = { start(false) },
+            onPlayFromStart = { start(true) },
+            onToggle = onTogglePlayback,
         )
     }
 }
 
-/** 进度表拉不到时的兜底：只播这一集，但仍然从上次听到的位置开始。 */
-private fun RecentPodcastEpisode.asSingleQueue(resumeMs: Long): ListQueue {
+/** 节目表拉不到时的兜底：只播这一集，位置交给调用方决定。 */
+private fun RecentPodcastEpisode.asSingleQueue(positionMs: Long): ListQueue {
     val meta = MediaMetadata(
         id = songId,
         title = episodeTitle,
@@ -653,7 +777,32 @@ private fun RecentPodcastEpisode.asSingleQueue(resumeMs: Long): ListQueue {
         title = radioName.ifBlank { "播客" },
         items = listOf(songId.toString() to meta.toMediaItem()),
         startIndex = 0,
-        position = resumeMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
+        position = positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
         source = QueueSource(QueueSource.Type.PODCAST, radioId.toString(), radioName),
     )
+}
+
+private fun podcastSubtitle(recent: RecentPodcastEpisode?, progress: PlaybackProgress?): String {
+    if (recent == null) return "还没有收听记录，去挑一部评书"
+    val total = progress?.durationMs?.takeIf { it > 0L } ?: recent.durationMs
+    if (progress?.completed == true) {
+        return if (total > 0L) "已听完 · ${formatShort(total)}" else "已听完"
+    }
+    val listened = progress?.positionMs ?: recent.positionMs
+    return buildString {
+        append("已听 ${formatShort(listened)}")
+        if (total > 0L) append(" / ${formatShort(total)}")
+    }
+}
+
+private fun formatShort(ms: Long): String {
+    val seconds = (ms / 1000).coerceAtLeast(0L)
+    val hours = seconds / 3600
+    val minutes = (seconds % 3600) / 60
+    val rest = seconds % 60
+    return if (hours > 0) {
+        String.format(java.util.Locale.getDefault(), "%d:%02d:%02d", hours, minutes, rest)
+    } else {
+        String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, rest)
+    }
 }

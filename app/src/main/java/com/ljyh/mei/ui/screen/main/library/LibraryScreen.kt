@@ -39,7 +39,8 @@ internal fun LibraryScreen(
     val likedId = likedPlaylist?.id
     LaunchedEffect(signedIn, likedId) { viewModel.loadLikedArtwork(likedId.takeIf { signedIn }) }
     val search = LocalLibrarySearchState.current
-    var preparingPlayback by remember { mutableStateOf(false) }
+    var preparingKey by remember { mutableStateOf<String?>(null) }
+    val resumeByKey by viewModel.resumeByKey.collectAsStateWithLifecycle()
     SideEffect {
         search?.state = if (signedIn) uiState else null
         // This is a known liked playlist, so its first detail visit can show the correct skeleton.
@@ -51,6 +52,48 @@ internal fun LibraryScreen(
     LaunchedEffect(viewModel) {
         viewModel.refreshErrors.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     }
+
+    // 同一时刻只允许一个集合在准备入队：连点两个歌单会互相顶掉队列。
+    val playPlaylist: (String, Boolean) -> Unit = { id, fromStart ->
+        val connection = player
+        if (connection != null && preparingKey == null) {
+            scope.launch {
+                preparingKey = "playlist:$id"
+                try {
+                    when (val result = viewModel.preparePlaylistPlayback(id, fromMemory = !fromStart)) {
+                        is Resource.Success -> {
+                            connection.playQueue(result.data)
+                            viewModel.recordPlaylistPlayback(id)
+                        }
+
+                        is Resource.Error -> Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                        Resource.Loading -> Unit
+                    }
+                } finally {
+                    preparingKey = null
+                }
+            }
+        }
+    }
+
+    val playAlbum: (Long, Boolean) -> Unit = { id, fromStart ->
+        val connection = player
+        if (connection != null && preparingKey == null) {
+            scope.launch {
+                preparingKey = "album:$id"
+                try {
+                    when (val result = viewModel.prepareAlbumPlayback(id, fromMemory = !fromStart)) {
+                        is Resource.Success -> connection.playQueue(result.data)
+                        is Resource.Error -> Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                        Resource.Loading -> Unit
+                    }
+                } finally {
+                    preparingKey = null
+                }
+            }
+        }
+    }
+
     LibraryRefreshBox(refreshing, signedIn, onRefresh = { viewModel.refresh() }) {
         content(
             LibraryPageState(
@@ -61,31 +104,19 @@ internal fun LibraryScreen(
                 likedSongTitle = likedSongTitle,
                 signedIn = signedIn,
                 scrollBehavior = scrollBehavior,
-                preparingPlayback = preparingPlayback,
+                preparingPlayback = preparingKey != null,
+                preparingKey = preparingKey,
+                resumeByKey = resumeByKey,
                 canPlay = player != null,
             ),
             LibraryPageActions(
-                onPlayLiked = { id ->
-                    if (!preparingPlayback && player != null) scope.launch {
-                        preparingPlayback = true
-                        try {
-                            when (val result = viewModel.preparePlaylistPlayback(id)) {
-                                is Resource.Success -> {
-                                    player.playQueue(result.data)
-                                    viewModel.recordPlaylistPlayback(id)
-                                }
-
-                                is Resource.Error -> Toast.makeText(
-                                    context,
-                                    result.message,
-                                    Toast.LENGTH_SHORT
-                                ).show()
-
-                                Resource.Loading -> Unit
-                            }
-                        } finally {
-                            preparingPlayback = false
-                        }
+                onPlayLiked = { id -> playPlaylist(id, false) },
+                onPlayPlaylist = playPlaylist,
+                onPlayAlbum = playAlbum,
+                onTogglePlayback = {
+                    player?.let { connection ->
+                        val media3 = connection.player
+                        media3.playWhenReady = !media3.playWhenReady
                     }
                 },
                 onOpenPlaylist = { id -> Screen.PlayList.navigate(nav) { addPath(id) } },

@@ -19,6 +19,7 @@ import com.ljyh.mei.data.model.room.PlaybackProgress
 import com.ljyh.mei.data.model.room.Playlist
 import com.ljyh.mei.data.model.room.PlaylistSongCrossRef
 import com.ljyh.mei.data.model.room.QQSong
+import com.ljyh.mei.data.model.room.QueueResume
 import com.ljyh.mei.data.model.room.Song
 import com.ljyh.mei.di.dao.AlbumsDao
 import com.ljyh.mei.di.dao.CachedLyricDao
@@ -30,15 +31,17 @@ import com.ljyh.mei.di.dao.PlaylistDao
 import com.ljyh.mei.di.dao.PlaylistSongCrossRefDao
 import com.ljyh.mei.di.dao.PlaybackProgressDao
 import com.ljyh.mei.di.dao.QQSongDao
+import com.ljyh.mei.di.dao.QueueResumeDao
 import com.ljyh.mei.di.dao.SongDao
 
 @Database(
     entities = [
         CacheColor::class, Song::class, Like::class, QQSong::class, Playlist::class,
         PlaybackHistory::class, AlbumEntity::class, ArtistEntity::class, AlbumArtistCrossRef::class,
-        CachedLyric::class, DownloadTask::class, PlaylistSongCrossRef::class, PlaybackProgress::class
+        CachedLyric::class, DownloadTask::class, PlaylistSongCrossRef::class, PlaybackProgress::class,
+        QueueResume::class,
     ],
-    version = 21
+    version = 22
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -53,6 +56,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun downloadDao(): DownloadDao
     abstract fun playlistSongCrossRefDao(): PlaylistSongCrossRefDao
     abstract fun playbackProgressDao(): PlaybackProgressDao
+    abstract fun queueResumeDao(): QueueResumeDao
 
     companion object {
         val MIGRATION_8_9 = object : Migration(8, 9) {
@@ -222,6 +226,21 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 歌单 / 专辑 / 电台的「上次播到哪一条」，与 playback_progress 的秒级进度分开。
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `queue_resume` (
+                        `queueKey` TEXT NOT NULL,
+                        `mediaId` TEXT NOT NULL,
+                        `indexInList` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`queueKey`)
+                    )
+                """.trimIndent())
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -231,7 +250,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "app_database"
-                ).addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21)
+                ).addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
                     .build()
                     .also { INSTANCE = it }
             }

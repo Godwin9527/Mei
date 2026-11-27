@@ -1,5 +1,6 @@
 package com.ljyh.mei.ui.screen.main.library
 
+import com.ljyh.mei.data.model.domain.AlbumContent
 import com.ljyh.mei.data.model.domain.MediaMetadata
 import com.ljyh.mei.data.model.domain.UserAccountSummary
 import com.ljyh.mei.data.model.domain.UserPlaylistPage
@@ -20,6 +21,13 @@ internal interface LibraryDataSource {
     suspend fun getUserPlaylist(uid: String, limit: Int): Resource<UserPlaylistPage>
     suspend fun getPlaylistDetail(id: String): Resource<MiniPlaylistDetail>
     suspend fun getSongDetails(ids: List<String>): List<MediaMetadata>
+
+    /**
+     * 收藏专辑的曲目。首页专辑卡片点播放键时才需要，默认实现让轻量数据源（测试替身）
+     * 不必为一个可选能力补桩。
+     */
+    suspend fun getAlbumDetail(id: String): Resource<AlbumContent> =
+        Resource.Error("当前数据源不支持专辑详情")
 }
 
 internal class RepositoryLibraryDataSource(
@@ -36,4 +44,5 @@ internal class RepositoryLibraryDataSource(
     override suspend fun getUserPlaylist(uid: String, limit: Int) = user.getUserPlaylist(uid, limit)
     override suspend fun getPlaylistDetail(id: String) = playlists.getPlaylistDetail(id)
     override suspend fun getSongDetails(ids: List<String>) = playlists.getSongDetails(ids)
+    override suspend fun getAlbumDetail(id: String) = playlists.getAlbumDetail(id)
 }

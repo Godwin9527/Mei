@@ -47,15 +47,18 @@ class PodcastPlaybackViewModel @Inject constructor(
     /**
      * 拉整张节目表并构造以该集为起点的队列；拉不到（网络失败 / 节目已下架）返回 null。
      *
-     * 起点位置直接取本地进度表并写进队列：交给 setMediaItems 的 startPosition，
-     * 播放器第一帧就落在上次听到的位置，不依赖切歌回调里那次 seek。
+     * [fromMemory] 为 true 时把集内进度写进队列起点，交给 setMediaItems 的 startPosition，
+     * 播放器第一帧就落在上次听到的位置，不依赖切歌回调里那次 seek；
+     * 为 false 表示重听这一集，从 0:00 开始。
      */
-    suspend fun buildQueue(episode: RecentPodcastEpisode): ListQueue? {
+    suspend fun buildQueue(episode: RecentPodcastEpisode, fromMemory: Boolean = true): ListQueue? {
         val songId = episode.songId.toString()
         if (_preparingId.value != null) return null
         _preparingId.value = songId
         return try {
-            val startMs = resumePositionOf(songId).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+            val startMs = if (fromMemory) {
+                resumePositionOf(songId).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+            } else 0
             val programs = loadPrograms(episode.radioId)
             val pairs = programs.mapNotNull { program ->
                 program.toMediaMetadata()?.let { meta -> meta.id.toString() to meta.toMediaItem() }

@@ -18,6 +18,14 @@ interface Queue {
 
     /** Source applied to songs when this queue becomes active. */
     val source: QueueSource? get() = null
+
+    /**
+     * 入队后是否抑制「单曲秒数续播」。
+     *
+     * 歌单级记忆只承诺「从第 8 首开始」，如果那一首本身还有半截的进度记录，
+     * 再自动跳进中段就和「从头播这个歌单」矛盾了。播客不抑制——集内进度正是它要的。
+     */
+    val suppressTrackResume: Boolean get() = false
     
     /** 队列总歌曲数量 */
     val totalCount: Int

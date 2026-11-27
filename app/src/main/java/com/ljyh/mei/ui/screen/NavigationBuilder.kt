@@ -19,6 +19,7 @@ import com.ljyh.mei.ui.screen.history.HistoryScreen
 import com.ljyh.mei.ui.screen.local.LocalMusicScreen
 import com.ljyh.mei.ui.screen.local.LocalSongListScreen
 import com.ljyh.mei.ui.screen.main.library.LibraryCollection
+import com.ljyh.mei.ui.screen.main.library.LibraryLayoutScreen
 import com.ljyh.mei.ui.screen.podcast.PodcastDetailScreen
 import com.ljyh.mei.ui.screen.podcast.PodcastsScreen
 import com.ljyh.mei.ui.screen.daily.EveryDay
@@ -90,6 +91,8 @@ internal fun NavGraphBuilder.navigationBuilder(
         Screen.Podcasts.route,
         drawsBehindSideBar = true,
     ) { PodcastsScreen() }
+
+    pageDestination(Screen.LibraryLayout.route) { LibraryLayoutScreen() }
 
     pageDestination(
         route = "${Screen.PodcastDetail.route}/{radioId}",

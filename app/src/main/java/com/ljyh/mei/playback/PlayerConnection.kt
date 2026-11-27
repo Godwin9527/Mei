@@ -28,6 +28,7 @@ import com.ljyh.mei.extensions.getQueueWindows
 import com.ljyh.mei.playback.queue.ListQueue
 import com.ljyh.mei.playback.queue.Queue
 import com.ljyh.mei.playback.queue.QueueSource
+import com.ljyh.mei.playback.queue.queueSource
 import com.ljyh.mei.utils.preferences.dataStore
 import com.ljyh.mei.utils.preferences.get
 import com.ljyh.mei.utils.log.reportException
@@ -68,6 +69,12 @@ class PlayerConnection(
 
     val mediaMetadata = MutableStateFlow(player.currentMetadata)
     val queueTitle = MutableStateFlow<String?>(null)
+
+    /**
+     * 当前队列的来源（歌单 / 专辑 / 电台…）。音乐库首页据此判断哪张卡片「正在播放」，
+     * 以及切换播放模式时该记到哪个集合名下。
+     */
+    val currentQueueSource = MutableStateFlow<QueueSource?>(null)
     val queueWindows = MutableStateFlow<List<Timeline.Window>>(emptyList())
     val currentMediaItemIndex = MutableStateFlow(-1)
     val currentWindowIndex = MutableStateFlow(-1)
@@ -96,6 +103,7 @@ class PlayerConnection(
         queueWindows.value = player.getQueueWindows()
         currentWindowIndex.value = player.getCurrentQueueIndex()
         currentMediaItemIndex.value = player.currentMediaItemIndex
+        currentQueueSource.value = player.currentMediaItem?.queueSource
         isFMMode.value = service.isFmMode()
 
         updatePlayModeState() // 核心：更新播放模式
@@ -229,6 +237,7 @@ class PlayerConnection(
         mediaMetadata.value = mediaItem?.metadata
         currentMediaItemIndex.value = player.currentMediaItemIndex
         currentWindowIndex.value = player.getCurrentQueueIndex()
+        currentQueueSource.value = mediaItem?.queueSource
         updateCanSkipPreviousAndNext()
     }
 
@@ -238,6 +247,7 @@ class PlayerConnection(
         queueTitle.value = service.queueTitle
         currentMediaItemIndex.value = player.currentMediaItemIndex
         currentWindowIndex.value = player.getCurrentQueueIndex()
+        currentQueueSource.value = player.currentMediaItem?.queueSource
         updateCanSkipPreviousAndNext()
     }
 
