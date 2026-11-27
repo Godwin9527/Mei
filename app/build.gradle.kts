@@ -20,8 +20,8 @@ android {
         applicationId = "com.ljyh.mei"
         minSdk = 29
         targetSdk = 37
-        versionCode = 12
-        versionName = "2.3.7"
+        versionCode = 13
+        versionName = "2.3.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

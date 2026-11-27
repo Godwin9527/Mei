@@ -49,7 +49,7 @@
 - **播客播放保护**：`playback/source/PodcastTrackRegistry.kt` 记录播客歌曲 id（**SharedPreferences 持久化**，`AppContext.onCreate` 调 `install`）；`MediaUriProvider` 对命中项固定 `standard` 音质并跳过 LX／解灰兜底（否则会白等 15 秒）。普通歌曲在目标音质取不到地址时，会再降级试一次 `standard`。
 - **应用内更新**：`data/repository/UpdateRepository.kt` + `ui/screen/update/`，入口在 设置 → 检查更新；安装包下载到 `filesDir/updates`，经 `FileProvider`（authority `${applicationId}.fileprovider`）交给系统安装器；需要 `REQUEST_INSTALL_PACKAGES` 权限。Release 资源名由 `tools/ci/prepare-apks.py` 生成，格式 `Mei_<tag>_<abi>.apk`，更新逻辑按 ABI 匹配。
 - **歌词页控制栏**：`PreferenceKeys.LyricsControlsAutoHideKey`（默认 false）控制是否 3 秒自动收起；点击歌词区域不再切换控制栏，只有上下滑动歌词才切换显隐。
-- **发布**：`versionName` 与 tag 保持一致（当前 2.3.7 / versionCode 12）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
+- **发布**：`versionName` 与 tag 保持一致（当前 2.3.8 / versionCode 13）。推 `v*` 标签触发 `.github/workflows/main.yml` 出包，应用内更新读同一个 Releases 数据。
 
 ## v2.3.0 起：播客体验与播放记忆
 
@@ -142,7 +142,7 @@
 | 层 | 存哪 | 记什么 | 谁用 |
 | --- | --- | --- | --- |
 | 单曲秒级 | Room `playback_progress`（DB 20 起） | 某首歌听到第几秒、是否听完 | 播客续播、详情页点某一首 |
-| 队列级 | Room `queue_resume`（DB 21→22） | 某个集合上次播到队列里哪一条（`mediaId` + 序号） | 首页卡片副标题「第 8 首」、点播放键的落点 |
+| 队列级 | Room `queue_resume`（DB 21→22，23 起加歌名/封面） | 某个集合上次播到队列里哪一条（`mediaId` + 序号 + 曲名 + 封面） | 首页卡片副标题与封面、点播放键的落点 |
 
 - **为什么歌单不记秒数**：歌单要的是「第 8 首 + 0:00」。如果不清掉单曲秒级续播，定位到第 8 首后那一首残留的半截进度会把播放位置拽进中段。因此 `Queue.suppressTrackResume` 在队列级关闭秒级续播：歌单 / 专辑 / 喜欢队列传 `true`，播客队列保持 `false`（集内进度正是它要的）。传递链 `Queue.suppressTrackResume` → `PlaybackQueueManager.suppressTrackResume` → `MusicService.onMediaItemTransition / onPlaybackStateChanged` 跳过 `resumeFromProgress`。
 - **按 mediaId 定位而不是序号**：开启随机播放后队列遍历顺序会变，`ListQueue.startingAt(mediaId)` 用 id 找位置，找不到（歌被移出歌单）就从头播。
@@ -153,7 +153,7 @@
 ### 首页布局
 
 - `LibraryBannerCard`（`component/LibraryBannerCard.kt`）是唯一通栏卡：封面铺满 + 底部渐变压暗 + 左下标题/副标题 + 右下圆形键，`compact = height < 132.dp` 决定字号与按钮 40/48dp。喜欢、创建歌单、收藏歌单、收藏专辑、播客五处共用，旧的 `LibraryPodcastCard` 已删除。
-- 卡片高度是设置项：`LibraryCardHeightKey`（112–200dp，默认 148）。副标题统一由 `bannerSubtitle(countLabel, indexInList, totalCount, mode, trailing)` 拼「32 首 · 第 8 首 · 随机」。
+- 卡片高度是设置项：`LibraryCardHeightKey`（112–200dp，默认 148）。副标题由 `bannerSubtitle(countLabel, trackTitle, indexInList, totalCount, mode)` 拼「32 首 · 简爱 · 随机」，**拿不到曲名才退回「第 N 首」**。
 - 区段顺序 `LibrarySectionOrderKey` 保留；旧顶栏弹窗 `LibraryLayoutDialog` 删除，改为独立页面 `Screen.LibraryLayout`（`library/layout`）→ `LibraryLayoutScreen`：预览卡 + 高度滑块（4dp 档）+ 4 个快捷档 + 区块上下箭头 + 三组条目勾选/排序（已选带↑↓、未选带＋、搜索框按组过滤）+ 两个重置按钮（`resetLayout` 清三个键、`clearPlayModeMemory` 清模式记忆）。
 - 勾选列表 `LibraryPinnedKey` 存 `LibraryPinned(created, collected, albums)`。**`LibraryPinnedCodec.decode` 返回可空**：null = 从未配置（回落到智能排序前 4 个），空列表 = 用户主动全部取消（整块隐藏，连标题一起）。右侧「全部 ›」仍在，进集合页。
 - 区块内的条目改成一列通栏大卡（原来是横向 `LazyRow` + `ArtworkCard`），`pickPinned` 按配置取、失效 id 跳过。
@@ -164,3 +164,12 @@
 - 升级前听完的集数仍显示「未播放」（v2.3.0 就存在，旧记录已被删）。
 - 播客卡片的「最近收听那一集」仍读全局 `RecentPodcastKey`，多个电台会互相覆盖；`queue_resume` 里按电台分别存了，但卡片暂未改用它。
 - 歌单里只剩一首可播（详情缺曲目）时会从第 1 首开始，`startingAt` 找不到 id 即从头播。
+
+## v2.3.8 起：卡片封面与副标题跟随播放
+
+- **`queue_resume` 加两列 `mediaTitle` / `coverUrl`**（DB 22→23）。原因：卡片在没播放时也要显示「点一下会播那首」，而只有 `mediaId` 查不到歌名，去拉歌单详情代价太大。写入点在 `MusicService.recordQueueResume`，从 `MediaItem.mediaMetadata` 的 `title` / `artworkUri` 抄一份。
+- **迁移用重建表而不是 `ALTER TABLE ADD COLUMN`**：新列不带 `DEFAULT`，和实体定义严格一致，避免 Room 的 schema 校验因默认值对不上报错；旧行补空串，播一次自动补齐。
+- **封面**：`cardCover(live, remembered, fallback)` —— 播放中的当前曲目封面 → 记住的那首封面 → 歌单原封面。只有 `isCurrent` 的卡才用播放器实时元数据（`PlayerConnection.mediaMetadata` 的 title/coverUrl），其余卡不会串。
+- **副标题**：`cardTrack(live, remembered)` 同上，专辑卡在没有曲名时用歌手名顶上（不再作为 `trailing` 拼在最后）。
+- **播客卡**大标题从电台名改为**集名**，`LibraryBannerCard(titleMaxLines = 2)` 走两行 + 按字数分档字号（≤32 字 15sp / ≤40 字 13sp / 更长 12sp）；副标题仍只有已听进度。
+- 2.3.7 写入的旧记录没有歌名，升级后第一次看到的非播放卡是「第 N 首」，播一次就好。

@@ -13,6 +13,11 @@ import androidx.room.PrimaryKey
  * 序号在两次播放之间没有可比性，只有 id 始终指向同一首歌。序号只用于界面上的「第 8 首」。
  *
  * [queueKey] 形如 `playlist:123` / `album:456` / `podcast:789` / `daily` / `local`。
+ *
+ * [mediaTitle] 与 [coverUrl] 是写入时顺手记下的曲名与封面。卡片在没播放的状态下也要
+ * 显示「点一下会播哪首」，而光有 id 查不到歌名——去拉歌单详情代价太大，所以入队时
+ * 从 `MediaMetadata` 一起抄一份。两列允许为空串：2.3.7 写入的旧记录没有这两个值，
+ * 界面会退回显示「第 N 首」，播一次就自动补上。
  */
 @Entity(tableName = "queue_resume")
 data class QueueResume(
@@ -20,4 +25,6 @@ data class QueueResume(
     val mediaId: String,
     val indexInList: Int,
     val updatedAt: Long,
+    val mediaTitle: String = "",
+    val coverUrl: String = "",
 )

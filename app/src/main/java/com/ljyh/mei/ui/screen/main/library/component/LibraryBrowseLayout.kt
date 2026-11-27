@@ -121,6 +121,14 @@ fun LibraryBrowseLayout(
     val queueSource = connection?.currentQueueSource?.collectAsStateWithLifecycle()?.value
     val currentQueueKey = remember(queueSource) { queueResumeKeyOf(queueSource) }
     val playingAudio = connection?.isPlaying?.collectAsStateWithLifecycle()?.value ?: false
+    // 正在播放那一首的元数据：卡片封面与曲名跟着它实时走，而不是锁死在歌单首图上。
+    val currentMeta = connection?.mediaMetadata?.collectAsStateWithLifecycle()?.value
+    val nowPlaying = remember(currentMeta?.id, currentMeta?.title, currentMeta?.coverUrl) {
+        NowPlayingInfo(
+            title = currentMeta?.title?.takeIf { it.isNotBlank() },
+            coverUrl = currentMeta?.coverUrl?.takeIf { it.isNotBlank() },
+        )
+    }
 
     val composition = remember(data) { data?.dashboardSelection() }
     val collected = remember(data) { data?.playlistsIn(LibraryCollection.Collected).orEmpty() }
@@ -206,6 +214,7 @@ fun LibraryBrowseLayout(
                                 resumeByKey = resumeByKey,
                                 modeMemory = modeMemory,
                                 currentQueueKey = currentQueueKey,
+                                nowPlaying = nowPlaying,
                                 playingAudio = playingAudio,
                                 preparingKey = preparingKey,
                                 canPlay = canPlay,
@@ -398,24 +407,39 @@ private fun LibraryEmptyLabel(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
- * 卡片副标题：曲目数 → 播到第几首 → 播放模式，按重要性从左往右排，
+ * 卡片副标题：曲目数 → 歌名（拿不到才退回「第 N 首」）→ 播放模式，按重要性从左往右排，
  * 宽度不够时截掉的是后面的信息，不会出现「只见作者不见进度」。
+ *
+ * 歌名用「点一下会播的那首」：正在播放时是当前曲目，没在播放时是上次记住的那一首。
  */
 private fun bannerSubtitle(
     countLabel: String?,
+    trackTitle: String?,
     indexInList: Int?,
     totalCount: Int,
     mode: PlayModeSnapshot?,
     trailing: String? = null,
 ): String {
     val index = indexInList?.takeIf { it >= 0 && (totalCount <= 0 || it < totalCount) }
+    val track = trackTitle?.takeIf { it.isNotBlank() }
     return listOfNotNull(
         countLabel?.takeIf { it.isNotBlank() },
-        index?.let { "第 ${it + 1} 首" },
+        track ?: index?.let { "第 ${it + 1} 首" },
         mode?.shortLabel(),
         trailing?.takeIf { it.isNotBlank() },
     ).joinToString(" · ")
 }
+
+/** 播放器里正在播的那一首。只有归属当前播放队列的卡片才会用它。 */
+private data class NowPlayingInfo(val title: String?, val coverUrl: String?)
+
+/** 卡片封面：播放中的当前曲目优先，其次是记住的那首，最后才是歌单原封面。 */
+private fun cardCover(live: NowPlayingInfo?, remembered: QueueResume?, fallback: String?): String? =
+    live?.coverUrl ?: remembered?.coverUrl?.takeIf { it.isNotBlank() } ?: fallback
+
+/** 卡片标题里的曲名：播放中取实时元数据，否则取记住的那首。 */
+private fun cardTrack(live: NowPlayingInfo?, remembered: QueueResume?): String? =
+    live?.title ?: remembered?.mediaTitle?.takeIf { it.isNotBlank() }
 
 private fun LazyListScope.mobileLibraryContent(
     data: LibraryContentUiState,
@@ -425,6 +449,7 @@ private fun LazyListScope.mobileLibraryContent(
     resumeByKey: Map<String, QueueResume>,
     modeMemory: Map<String, PlayModeSnapshot>,
     currentQueueKey: String?,
+    nowPlaying: NowPlayingInfo?,
     playingAudio: Boolean,
     preparingKey: String?,
     canPlay: Boolean,
@@ -455,6 +480,7 @@ private fun LazyListScope.mobileLibraryContent(
                 resumeByKey = resumeByKey,
                 modeMemory = modeMemory,
                 currentQueueKey = currentQueueKey,
+                nowPlaying = nowPlaying,
                 playingAudio = playingAudio,
                 preparingKey = preparingKey,
                 canPlay = canPlay,
@@ -473,6 +499,7 @@ private fun LazyListScope.mobileLibraryContent(
                 resumeByKey = resumeByKey,
                 modeMemory = modeMemory,
                 currentQueueKey = currentQueueKey,
+                nowPlaying = nowPlaying,
                 playingAudio = playingAudio,
                 preparingKey = preparingKey,
                 canPlay = canPlay,
@@ -493,6 +520,7 @@ private fun LazyListScope.mobileLibraryContent(
                 resumeByKey = resumeByKey,
                 modeMemory = modeMemory,
                 currentQueueKey = currentQueueKey,
+                nowPlaying = nowPlaying,
                 playingAudio = playingAudio,
                 preparingKey = preparingKey,
                 canPlay = canPlay,
@@ -510,6 +538,7 @@ private fun LazyListScope.mobileLibraryContent(
                 resumeByKey = resumeByKey,
                 modeMemory = modeMemory,
                 currentQueueKey = currentQueueKey,
+                nowPlaying = nowPlaying,
                 playingAudio = playingAudio,
                 preparingKey = preparingKey,
                 canPlay = canPlay,
@@ -525,6 +554,7 @@ private fun LazyListScope.mobileLibraryContent(
                 cardHeight = cardHeight,
                 canPlay = canPlay,
                 currentQueueKey = currentQueueKey,
+                nowPlaying = nowPlaying,
                 playingAudio = playingAudio,
                 onTogglePlayback = onTogglePlayback,
             )
@@ -551,6 +581,7 @@ private fun LazyListScope.mobileLikedSection(
     resumeByKey: Map<String, QueueResume>,
     modeMemory: Map<String, PlayModeSnapshot>,
     currentQueueKey: String?,
+    nowPlaying: NowPlayingInfo?,
     playingAudio: Boolean,
     preparingKey: String?,
     canPlay: Boolean,
@@ -561,19 +592,23 @@ private fun LazyListScope.mobileLikedSection(
 ) {
     val liked = data.likedPlaylist()
     val key = liked?.id?.let { "playlist:$it" }
+    val remembered = key?.let { resumeByKey[it] }
+    val likedCurrent = key != null && key == currentQueueKey
+    val live = if (likedCurrent) nowPlaying else null
     item(key = "mobile_liked") {
         LibraryBannerCard(
             title = "我喜欢的音乐",
             subtitle = bannerSubtitle(
                 countLabel = liked?.let { "${it.count} 首" },
-                indexInList = key?.let { resumeByKey[it]?.indexInList },
+                trackTitle = cardTrack(live, remembered),
+                indexInList = remembered?.indexInList,
                 totalCount = liked?.count ?: 0,
                 mode = key?.let { modeMemory[it] },
             ),
-            coverUrl = likedArtwork,
+            coverUrl = cardCover(live, remembered, likedArtwork),
             fallbackIcon = Icons.Rounded.Favorite,
             height = cardHeight,
-            isCurrent = key != null && key == currentQueueKey,
+            isCurrent = likedCurrent,
             isPlaying = playingAudio,
             preparing = preparingKey != null && preparingKey == key,
             canPlay = canPlay && liked != null && liked.count > 0,
@@ -595,6 +630,7 @@ private fun LazyListScope.mobilePlaylistShelf(
     resumeByKey: Map<String, QueueResume>,
     modeMemory: Map<String, PlayModeSnapshot>,
     currentQueueKey: String?,
+    nowPlaying: NowPlayingInfo?,
     playingAudio: Boolean,
     preparingKey: String?,
     canPlay: Boolean,
@@ -614,18 +650,22 @@ private fun LazyListScope.mobilePlaylistShelf(
     }
     items(entries, key = { "mobile_${key}_${it.id}" }) { playlist ->
         val queueKey = "playlist:${playlist.id}"
+        val remembered = resumeByKey[queueKey]
+        val isCurrent = queueKey == currentQueueKey
+        val live = if (isCurrent) nowPlaying else null
         LibraryBannerCard(
             title = playlist.title,
             subtitle = bannerSubtitle(
                 countLabel = "${playlist.count} 首",
-                indexInList = resumeByKey[queueKey]?.indexInList,
+                trackTitle = cardTrack(live, remembered),
+                indexInList = remembered?.indexInList,
                 totalCount = playlist.count,
                 mode = modeMemory[queueKey],
             ),
-            coverUrl = playlist.cover,
+            coverUrl = cardCover(live, remembered, playlist.cover),
             fallbackIcon = Icons.Rounded.LibraryMusic,
             height = cardHeight,
-            isCurrent = queueKey == currentQueueKey,
+            isCurrent = isCurrent,
             isPlaying = playingAudio,
             preparing = preparingKey != null && preparingKey == queueKey,
             canPlay = canPlay && playlist.count > 0,
@@ -644,6 +684,7 @@ private fun LazyListScope.mobileAlbumShelf(
     resumeByKey: Map<String, QueueResume>,
     modeMemory: Map<String, PlayModeSnapshot>,
     currentQueueKey: String?,
+    nowPlaying: NowPlayingInfo?,
     playingAudio: Boolean,
     preparingKey: String?,
     canPlay: Boolean,
@@ -661,19 +702,24 @@ private fun LazyListScope.mobileAlbumShelf(
     }
     items(entries, key = { "mobile_album_${it.id}" }) { album ->
         val queueKey = "album:${album.id}"
+        val remembered = resumeByKey[queueKey]
+        val isCurrent = queueKey == currentQueueKey
+        val live = if (isCurrent) nowPlaying else null
         LibraryBannerCard(
             title = album.title,
             subtitle = bannerSubtitle(
                 countLabel = null,
-                indexInList = resumeByKey[queueKey]?.indexInList,
+                // 专辑没有「共几首」可显示：曲名在上，没有曲名时歌手顶上。
+                trackTitle = cardTrack(live, remembered)
+                    ?: album.artist.joinToString(" / ") { it.name },
+                indexInList = remembered?.indexInList,
                 totalCount = 0,
                 mode = modeMemory[queueKey],
-                trailing = album.artist.joinToString(" / ") { it.name },
             ),
-            coverUrl = album.cover,
+            coverUrl = cardCover(live, remembered, album.cover),
             fallbackIcon = Icons.Rounded.Album,
             height = cardHeight,
-            isCurrent = queueKey == currentQueueKey,
+            isCurrent = isCurrent,
             isPlaying = playingAudio,
             preparing = preparingKey != null && preparingKey == queueKey,
             canPlay = canPlay,
@@ -694,6 +740,7 @@ private fun LazyListScope.mobilePodcastSection(
     cardHeight: Dp,
     canPlay: Boolean,
     currentQueueKey: String?,
+    nowPlaying: NowPlayingInfo?,
     playingAudio: Boolean,
     onTogglePlayback: () -> Unit,
 ) {
@@ -719,6 +766,13 @@ private fun LazyListScope.mobilePodcastSection(
         // 播客记忆的是「哪一集 + 集内秒数」，副标题直接给集内进度比「第几集」更有用。
         val queueKey = recent?.radioId?.let { "podcast:$it" }
         val preparing = preparingId != null
+        val podcastCurrent = queueKey != null && queueKey == currentQueueKey
+        val live = if (podcastCurrent) nowPlaying else null
+        // 大标题给集名而不是电台名：集名里通常已经带了节目名，电台名白占一行。
+        val episodeLabel = live?.title
+            ?: recent?.episodeTitle?.takeIf { it.isNotBlank() }
+            ?: recent?.radioName?.takeIf { it.isNotBlank() }
+            ?: "我关注的播客"
 
         // 用 lambda 而不是局部 fun：局部函数在 compose 作用域里会被当成 composable，
         // 就没法塞进 LibraryBannerCard 的普通回调里了。
@@ -741,12 +795,12 @@ private fun LazyListScope.mobilePodcastSection(
         }
 
         LibraryBannerCard(
-            title = recent?.radioName?.takeIf { it.isNotBlank() } ?: "我关注的播客",
+            title = episodeLabel,
             subtitle = podcastSubtitle(recent, recentProgress),
-            coverUrl = recent?.coverUrl,
+            coverUrl = live?.coverUrl ?: recent?.coverUrl,
             fallbackIcon = Icons.Rounded.Mic,
             height = cardHeight,
-            isCurrent = queueKey != null && queueKey == currentQueueKey,
+            isCurrent = podcastCurrent,
             isPlaying = playingAudio,
             preparing = preparing,
             canPlay = canPlay && recent != null,
@@ -758,6 +812,7 @@ private fun LazyListScope.mobilePodcastSection(
             onPlay = { start(false) },
             onPlayFromStart = { start(true) },
             onToggle = onTogglePlayback,
+            titleMaxLines = 2,
         )
     }
 }

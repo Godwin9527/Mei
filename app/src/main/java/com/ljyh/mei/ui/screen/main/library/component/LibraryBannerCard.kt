@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 
 /**
@@ -65,9 +66,18 @@ internal fun LibraryBannerCard(
     onToggle: () -> Unit,
     onPlayFromStart: () -> Unit,
     modifier: Modifier = Modifier,
+    titleMaxLines: Int = 1,
 ) {
     val compact = height < 132.dp
-    val titleStyle = when {
+    // 播客集名走两行：按字数降字号，长集名宁可小一点也别一行就砍掉。
+    val titleStyle = if (titleMaxLines > 1) {
+        val (size, line) = when {
+            title.length <= 32 -> 15.sp to 19.sp
+            title.length <= 40 -> 13.sp to 17.sp
+            else -> 12.sp to 16.sp
+        }
+        MaterialTheme.typography.titleMedium.copy(fontSize = size, lineHeight = line)
+    } else when {
         height >= 170.dp -> MaterialTheme.typography.headlineSmall
         compact -> MaterialTheme.typography.titleMedium
         else -> MaterialTheme.typography.titleLarge
@@ -146,7 +156,7 @@ internal fun LibraryBannerCard(
                 style = titleStyle,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
-                maxLines = 1,
+                maxLines = titleMaxLines,
                 overflow = TextOverflow.Ellipsis,
             )
             if (!subtitle.isNullOrBlank()) {

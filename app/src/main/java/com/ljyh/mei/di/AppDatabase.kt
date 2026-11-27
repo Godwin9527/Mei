@@ -41,7 +41,7 @@ import com.ljyh.mei.di.dao.SongDao
         CachedLyric::class, DownloadTask::class, PlaylistSongCrossRef::class, PlaybackProgress::class,
         QueueResume::class,
     ],
-    version = 22
+    version = 23
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -241,6 +241,33 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 记住「哪一首」的同时也记住歌名与封面，首页卡片未播放时也能显示曲名。
+                // 走重建表而不是 ALTER ADD COLUMN：新列不带 DEFAULT，与实体定义严格一致，
+                // 免得 Room 的 schema 校验因为默认值对不上而报错。旧记录两列留空，播一次补齐。
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `queue_resume_new` (
+                        `queueKey` TEXT NOT NULL,
+                        `mediaId` TEXT NOT NULL,
+                        `indexInList` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        `mediaTitle` TEXT NOT NULL,
+                        `coverUrl` TEXT NOT NULL,
+                        PRIMARY KEY(`queueKey`)
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO `queue_resume_new`
+                        (`queueKey`, `mediaId`, `indexInList`, `updatedAt`, `mediaTitle`, `coverUrl`)
+                    SELECT `queueKey`, `mediaId`, `indexInList`, `updatedAt`, '', ''
+                    FROM `queue_resume`
+                """.trimIndent())
+                db.execSQL("DROP TABLE `queue_resume`")
+                db.execSQL("ALTER TABLE `queue_resume_new` RENAME TO `queue_resume`")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -250,7 +277,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "app_database"
-                ).addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
+                ).addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
                     .build()
                     .also { INSTANCE = it }
             }

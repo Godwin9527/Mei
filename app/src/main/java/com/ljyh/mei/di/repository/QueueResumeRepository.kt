@@ -24,8 +24,19 @@ class QueueResumeRepository @Inject constructor(
 
     suspend fun resumeOf(queueKey: String): QueueResume? = dao.get(queueKey)
 
-    /** 记下当前播放到的曲目。id 为空或序号非法时直接跳过。 */
-    suspend fun record(queueKey: String, mediaId: String, indexInList: Int) {
+    /**
+     * 记下当前播放到的曲目。id 为空或序号非法时直接跳过。
+     *
+     * [mediaTitle] / [coverUrl] 一并落库：卡片未播放时要显示「点一下会播哪首」，
+     * 只有 id 是查不到名字的。元数据还没加载好（占位符）时传空串，界面退回「第 N 首」。
+     */
+    suspend fun record(
+        queueKey: String,
+        mediaId: String,
+        indexInList: Int,
+        mediaTitle: String = "",
+        coverUrl: String = "",
+    ) {
         if (queueKey.isBlank() || mediaId.isBlank() || indexInList < 0) return
         dao.upsert(
             QueueResume(
@@ -33,6 +44,8 @@ class QueueResumeRepository @Inject constructor(
                 mediaId = mediaId,
                 indexInList = indexInList,
                 updatedAt = System.currentTimeMillis(),
+                mediaTitle = mediaTitle,
+                coverUrl = coverUrl,
             )
         )
     }

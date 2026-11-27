@@ -748,9 +748,13 @@ class MusicService : MediaLibraryService(),
         val key = com.ljyh.mei.di.repository.queueResumeKeyOf(item.queueSource) ?: return
         val index = player.currentMediaItemIndex
         if (index < 0) return
+        // 顺手抄一份曲名与封面：首页卡片没在播放时也要显示「点一下会播哪首」。
+        val meta = item.mediaMetadata
+        val title = meta.title?.toString().orEmpty()
+        val cover = meta.artworkUri?.toString().orEmpty()
         scope.launch {
             try {
-                queueResumeRepository.record(key, item.mediaId, index)
+                queueResumeRepository.record(key, item.mediaId, index, title, cover)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
